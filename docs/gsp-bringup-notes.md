@@ -138,8 +138,11 @@ GSP/SEC2/PMU — это **Falcon** (FAst Logic Controller), малые RISC-по
 монитора. Это снимает проблему отсутствия второй видеокарты на dev-машине.
 
 1. **VBIOS reader** — прочитать ROM карты, распарсить `PmuLookupTable`, найти и
-   извлечь FWSEC (app id 0x85) и его `FalconUCodeDescV3`.
-   _Проверка:_ распознали заголовки, нашли IMEM/DMEM/подписи.
+   извлечь FWSEC (app id 0x85) и его `FalconUCodeDescV3`. ✅ **сделано** —
+   `tools/vbios_dump.c`: образы PCI ROM → BIT (token 0x70) → falcon data ptr →
+   PmuLookupTable (app 0x85) → дескриптор Falcon ucode (V2/V3), с `--extract`.
+   _Проверка:_ на дампе VBIOS карты печатает imem/dmem size, signature_count,
+   смещение ucode; извлекает блоб.
 2. **Falcon primitives** — reset / config / DMA-load IMEM+DMEM / start, поверх
    BAR0 MMIO.
    _Проверка:_ контролируемый ucode стартует, mailbox меняет значение.

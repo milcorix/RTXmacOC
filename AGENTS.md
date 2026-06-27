@@ -94,8 +94,9 @@ docs/                   архитектура, роадмап, конспект
 ## Текущий статус (обновлять)
 
 - Слой 1: ✅ код (`driver/RTXProbe`) + декодер сверен с ядром. CI зелёный.
-- Слой 2: 🔨 план в `docs/gsp-bringup-notes.md`; первый код — VBIOS reader
-  (`tools/vbios_dump.c`): чтение ROM карты и парсинг под поиск FWSEC.
+- Слой 2: 🔨 план в `docs/gsp-bringup-notes.md`. Шаг 1 (VBIOS reader) ✅ —
+  `tools/vbios_dump.c` локализует и извлекает FWSEC ucode (структуры из nova-core,
+  верифицированы). Следующий — Falcon primitives (reset/DMA-load/boot) поверх BAR0.
 - Дальше по `docs/gsp-bringup-notes.md` §7.
 
 ## Ключевые источники (референс-база)
