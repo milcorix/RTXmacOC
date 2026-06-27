@@ -1,8 +1,8 @@
 name: build-macos
 
-# Сборка драйверов RTXmacOC на macOS-раннере (Intel, x86_64 — как наш таргет).
-# Проверяет компиляцию kext + dext + user-space пробы. Запуск на железе сюда
-# не входит (RTX в раннере нет) — только доказательство, что код собирается.
+# Сборка драйверов RTXmacOC на macOS-раннере. Каждый компонент — отдельный шаг,
+# чтобы было видно, что именно собралось, а что нет. Запуск на железе сюда не
+# входит (RTX в раннере нет) — только проверка компиляции.
 
 on:
   push:
@@ -12,15 +12,62 @@ on:
 
 jobs:
   build:
-    # macos-latest = Apple Silicon (быстро доступен). Код собираем под
-    # -arch x86_64 (целевой Hackintosh-arch) — кросс-компиляция для compile-check.
     runs-on: macos-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Build (kext + dext + probe)
-        run: bash tools/ci_build_macos.sh
+      - name: Toolchain info
+        run: |
+          sw_vers
+          xcodebuild -version || true
+          echo "macOS SDK:     $(xcrun --sdk macosx --show-sdk-path)"
+          echo "DriverKit SDK: $(xcrun --sdk driverkit --show-sdk-path 2>/dev/null || echo MISSING)"
+          echo "iig:           $(xcrun --find iig 2>/dev/null || echo MISSING)"
+          echo "clang:         $(xcrun --find clang)"
+          ls "$(xcrun --sdk macosx --show-sdk-path)/System/Library/Frameworks/Kernel.framework/Headers" >/dev/null 2>&1 \
+            && echo "Kernel.framework headers: present" \
+            || echo "Kernel.framework headers: MISSING"
+
+      - name: Build user-space pcie_probe
+        run: |
+          mkdir -p build
+          clang pcie_probe.c -framework IOKit -framework CoreFoundation -o build/pcie_probe
+          echo "OK: pcie_probe"
+
+      - name: Build kext RTXProbe (compile-check)
+        run: |
+          mkdir -p build
+          SDK="$(xcrun --sdk macosx --show-sdk-path)"
+          clang++ -x c++ -c driver/RTXProbe/RTXProbe.cpp \
+            -arch x86_64 \
+            -isysroot "$SDK" \
+            -I"$SDK/System/Library/Frameworks/Kernel.framework/Headers" \
+            -I"$SDK/System/Library/Frameworks/Kernel.framework/PrivateHeaders" \
+            -fapple-kext -fno-builtin -fno-exceptions -fno-rtti -fno-common \
+            -DKERNEL -DKERNEL_PRIVATE -DDRIVER_PRIVATE -DAPPLE -DNeXT \
+            -std=gnu++17 \
+            -o build/RTXProbe.o
+          echo "OK: RTXProbe kext compiles"
+
+      - name: Build dext RTXProbeDext (iig + compile-check)
+        run: |
+          mkdir -p build
+          DK="$(xcrun --sdk driverkit --show-sdk-path)"
+          IIG="$(xcrun --find iig)"
+          "$IIG" \
+            --def driver/RTXProbeDext/RTXProbeDext.iig \
+            --header build/RTXProbeDext.h \
+            --impl build/RTXProbeDext.iig.cpp \
+            -- \
+            -isysroot "$DK" -x c++ -std=gnu++17 -I driver/RTXProbeDext
+          clang++ -c -isysroot "$DK" -arch x86_64 -std=gnu++17 \
+            -fno-exceptions -fno-rtti -I build -I driver/RTXProbeDext \
+            driver/RTXProbeDext/RTXProbeDext.cpp -o build/RTXProbeDext.o
+          clang++ -c -isysroot "$DK" -arch x86_64 -std=gnu++17 \
+            -fno-exceptions -fno-rtti -I build -I driver/RTXProbeDext \
+            build/RTXProbeDext.iig.cpp -o build/RTXProbeDext.iig.o
+          echo "OK: RTXProbeDext dext compiles"
 
       - name: Upload build artifacts
         if: always()
