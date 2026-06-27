@@ -144,10 +144,12 @@ GSP/SEC2/PMU — это **Falcon** (FAst Logic Controller), малые RISC-по
    _Проверка:_ на дампе VBIOS карты печатает imem/dmem size, signature_count,
    смещение ucode; извлекает блоб.
 2. **Falcon primitives** — reset / config / DMA-load IMEM+DMEM / start, поверх
-   BAR0 MMIO. 🔨 **частично**: `driver/gsp/falcon.{h,c}` — reset движка, ожидание
-   скраба памяти, start/halt/mailbox/boot, проверка WPR2 и GFW boot (регистры
-   `falcon_regs.h`, сверены с nova-core). Осталось: DMA-load ucode (нужны kernel
-   DMA-буферы) и программирование BROM (подпись).
+   BAR0 MMIO. ✅ **движок готов**: `driver/gsp/falcon.{h,c}` — reset (GA102/Ada:
+   reset_ready→engine reset→scrub→select_core→FALCON_RM), `select_core`,
+   `program_brom` (RSA3K), DMA-load IMEM(sec)+DMEM (DMATRFCMD-цикл), start/boot/
+   mailbox, проверка WPR2/GFW. Регистры `falcon_regs.h`, всё сверено с nova-core.
+   Осталось для запуска FWSEC: пропатчить образ (DMEMMAPPER init_cmd=FRTS +
+   подпись) и выделить kernel DMA-буфер в kext.
    _Проверка:_ контролируемый ucode стартует, mailbox меняет значение.
 3. **FWSEC-FRTS** — выполнить FRTS через DMEMMAPPER, получить **WPR2**.
    _Проверка:_ регистры WPR показывают выделенный регион.
