@@ -66,7 +66,7 @@
 |---|---|---|---|
 | `nv_fwsec_locate` (fwsec_locate.c) | nova `vbios.rs` | переиспользуемый локатор FWSEC (PCIR/NPDE/BIT/PmuLookupTable), без I/O | ✅ |
 | `FwsecRun.cpp` (kext) | nova `fwsec.rs::new`+`run`, `falcon.rs` | VBIOS из BAR0 ROM shadow (0x300000) → locate → DMA-буфер (IOBufferMemoryDescriptor) → patch FRTS+signature → reset_ga102 → dma_load → boot → проверка mbox0/WPR2 | 🟡 CI (kext compile-check), на железе не исполнялось |
-| frts_addr/frts_size (регион WPR2) | nova fb/usable FB size | **НЕ реализовано** — параметр FwsecRun; вычисление из объёма VRAM отнесено к L3 | TODO |
+| frts_addr/frts_size (регион WPR2) | nova `fb.rs FbLayout` + `fb/hal/ga102.rs`/`tu102.rs` | `driver/gsp/fb_layout.*`: vidmem=NV_USABLE_FB_SIZE_IN_MB×1MiB; vga_workspace из NV_PDISP_VGA_WORKSPACE_BASE; frts_base=align_down(vga,128K)-1MiB; frts_size=1MiB | 🟡 CI / 📄 SRC |
 
 ## Слой 2 — ещё НЕ портировано (следующие шаги)
 

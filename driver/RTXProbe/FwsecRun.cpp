@@ -20,6 +20,7 @@ extern "C" {
 #include "../gsp/falcon.h"
 #include "../gsp/fwsec_patch.h"
 #include "../gsp/fwsec_locate.h"
+#include "../gsp/fb_layout.h"
 }
 
 /* --- glue: nv_mmio_t поверх смапленного BAR0 --- */
@@ -123,8 +124,7 @@ static IOReturn fwsec_patch_and_run(const nv_mmio_t *io,
     return kIOReturnError;
 }
 
-IOReturn RTXRunFwsecFrts(IOPCIDevice *pci, volatile void *bar0Base,
-                         uint64_t frtsAddr, uint64_t frtsSize)
+IOReturn RTXRunFwsecFrts(IOPCIDevice *pci, volatile void *bar0Base)
 {
     (void)pci;
     if (bar0Base == nullptr) {
@@ -137,6 +137,14 @@ IOReturn RTXRunFwsecFrts(IOPCIDevice *pci, volatile void *bar0Base,
     io.rd     = bar_rd;
     io.wr     = bar_wr;
     io.udelay = bar_udelay;
+
+    /* Регион WPR2/FRTS из объёма VRAM (fb_layout). */
+    uint64_t frtsAddr = 0, frtsSize = 0;
+    if (nv_fb_compute_frts(&io, &frtsAddr, &frtsSize) != 0) {
+        IOLog("RTXFwsec: failed to compute FRTS region (VRAM size?)\n");
+        return kIOReturnError;
+    }
+    IOLog("RTXFwsec: FRTS region addr=0x%llx size=0x%llx\n", frtsAddr, frtsSize);
 
     /* 1. Читаем VBIOS из теневой ROM в BAR0. */
     const uint32_t vbios_len = NV_VBIOS_SCAN_MAX;

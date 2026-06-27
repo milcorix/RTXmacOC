@@ -41,8 +41,8 @@
     coherent DMA-буфер (`IOBufferMemoryDescriptor`) → patch FRTS+signature →
     reset(GA102) → dma_load → boot(mbox0=0) → проверка `mbox0==0` и `nv_wpr2_is_set()`
   - компилируется (CI); **на железе не исполнялось**
-  - ⚠️ TODO: `frts_addr/frts_size` (регион WPR2) пока параметр — вычисление из объёма
-    VRAM отнесено к задаче 9 (L3 memory). Без него FWSEC-FRTS не запустить реально.
+  - ✅ FRTS-регион теперь считается внутри (`driver/gsp/fb_layout.*`, порт `fb.rs`):
+    оркестратор самодостаточен, внешний параметр убран.
   - _Requirements: 3.1, 12.2_
 
 - [ ] 6. Booter Loader → загрузка GSP-RM в WPR2, старт RISC-V

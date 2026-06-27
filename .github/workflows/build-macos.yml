@@ -59,6 +59,12 @@ jobs:
           cc -Wall -Wextra -O2 -c driver/gsp/fwsec_locate.c -o build/fwsec_locate.o
           echo "OK: gsp/fwsec_locate.c"
 
+      - name: Build FB layout / FRTS region (portable C, layer 2 task 5/9)
+        run: |
+          mkdir -p build
+          cc -Wall -Wextra -O2 -c driver/gsp/fb_layout.c -o build/fb_layout.o
+          echo "OK: gsp/fb_layout.c"
+
       - name: Build FWSEC kext orchestrator (compile-check, layer 2 task 5)
         run: |
           mkdir -p build

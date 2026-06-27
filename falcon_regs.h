@@ -132,6 +132,19 @@
 #define NV_ROM_SHADOW_BASE           0x00300000u
 #define NV_VBIOS_SCAN_MAX            0x00100000u
 
+/* --- FB layout / расчёт региона FRTS (fb.rs + fb/hal, GA102/Ada) --- */
+/* Размер usable VRAM в МБ (alias NV_PGC6_AON_SECURE_SCRATCH_GROUP_42). */
+#define NV_USABLE_FB_SIZE_IN_MB      0x001183A4u
+/* VGA workspace base: addr[31:8]<<16, status_valid = bit3. */
+#define NV_PDISP_VGA_WORKSPACE_BASE  0x00625F04u
+/* Fuse: display_disabled = bit0 (ga100/Ada). */
+#define NV_FUSE_STATUS_OPT_DISPLAY   0x00820C04u
+/* Константы layout (fb.rs / tu102 fb-hal). */
+#define NV_FRTS_SIZE                 0x00100000u  /* 1 MiB (frts_size_tu102) */
+#define NV_PRAMIN_SIZE               0x00100000u  /* 1 MiB */
+#define NV_VBIOS_WORKSPACE_SIZE      0x00020000u  /* 128 KiB */
+#define NV_FRTS_ALIGN                0x00020000u  /* 128 KiB down-align */
+
 /* --- FUSE: версии ucode для выбора HS-подписи (regs.rs, [16] stride 4) --- */
 #define NV_FUSE_OPT_FPF_SIZE                  16u
 #define NV_FUSE_OPT_FPF_NVDEC_UCODE1_VERSION  0x00824100u

@@ -16,16 +16,13 @@
 
 /*
  * Прогнать FWSEC-FRTS.
- *   pci        — устройство (для config/доступа при необходимости);
- *   bar0Base   — виртуальный адрес смапленного BAR0 (из mapDeviceMemoryWithRegister);
- *   frtsAddr   — физ. адрес региона WPR2 в VRAM;
- *   frtsSize   — размер региона WPR2.
- * frtsAddr/frtsSize вычисляются снаружи из объёма VRAM (TODO: задача L3).
+ *   pci        — устройство;
+ *   bar0Base   — виртуальный адрес смапленного BAR0.
+ * Регион WPR2/FRTS вычисляется внутри из объёма VRAM (fb_layout).
  *
  * Возвращает kIOReturnSuccess, если FWSEC завершился успешно (mbox0==0) и WPR2
  * выставлен; иначе — код ошибки.
  */
-IOReturn RTXRunFwsecFrts(IOPCIDevice *pci, volatile void *bar0Base,
-                         uint64_t frtsAddr, uint64_t frtsSize);
+IOReturn RTXRunFwsecFrts(IOPCIDevice *pci, volatile void *bar0Base);
 
 #endif /* RTXMACOC_FWSECRUN_HPP */
