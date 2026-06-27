@@ -1,5 +1,7 @@
 # RTXmacOC
 
+[![build-macos](https://github.com/prd1324/RTXmacOC/actions/workflows/build-macos.yml/badge.svg)](https://github.com/prd1324/RTXmacOC/actions/workflows/build-macos.yml)
+
 **Полноценная поддержка NVIDIA RTX на всех версиях macOS.**
 
 Амбициозный open-source проект. Мы беремся за то, до чего никто так и не добрался — заставить современные карты NVIDIA RTX работать на Mac по-настоящему, а не наполовину.

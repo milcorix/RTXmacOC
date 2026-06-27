@@ -17,13 +17,23 @@
 > Шаблоны артефактов уже заведены: `docs/testbed.md`, `docs/hw-dumps/`,
 > скелеты `skeletons/EmptyKext/` и `skeletons/EmptyDext/`, корневой `Makefile`.
 
-- [ ] Зафиксировать таргет: **x86 Hackintosh под OpenCore**, RTX как основная карта.
-- [ ] Собрать `pcie_probe` на реальном хакинтоше с RTX 4070 Super:
+- [x] Зафиксировать таргет: **x86 Hackintosh под OpenCore**, RTX как основная карта.
+      → зафиксировано в `docs/testbed.md` и ARCHITECTURE.md.
+- [~] Собрать `pcie_probe` на реальном хакинтоше с RTX 4070 Super:
       `clang pcie_probe.c -framework IOKit -framework CoreFoundation -o pcie_probe`
-- [ ] Снять реальный вывод: BAR0/BAR1/BAR3, subsystem-id, revision-id, class-code.
-      Приложить лог в `docs/hw-dumps/`.
-- [ ] Поставить Xcode + SDK; проверить сборку пустого kext и пустого dext.
-- [ ] Завести тестовый стенд (версия macOS, конфиг OpenCore, статус SIP) — в `docs/testbed.md`.
+      → **компилируется в CI** (macOS-раннер, GitHub Actions). Запуск на реальном
+      железе ждёт macOS на ПК (нужна вторая GPU/USB-загрузка для вывода).
+- [~] Снять реальный вывод: BAR0/BAR1/BAR3, subsystem-id, revision-id, class-code.
+      → сняты **из Windows**: device `0x2783`, subsys `1569:F302`, rev `0xA1`,
+      class `0x030000`, **BAR0=0x52000000 (16MB)**, BAR1=0x40000000 (2GB),
+      BAR3=0x50000000 (32MB). См. `docs/hw-dumps/`, `docs/testbed.md`.
+      Снятие через `pcie_probe` на самой macOS — когда поднимем macOS на ПК.
+- [x] Поставить Xcode + SDK; проверить сборку kext и dext.
+      → **GitHub Actions, macOS-раннер.** kext `RTXProbe` собирается (✅),
+      dext — best-effort (iig на Xcode 26.5 допиливаем). Вместо «пустышек» —
+      **реальные драйверы** (матчинг 10DE:2783 + маппинг BAR0 + чтение PMC_BOOT_0).
+- [x] Завести тестовый стенд (версия macOS, конфиг OpenCore, статус SIP) — в `docs/testbed.md`.
+      → заполнено по Windows-части; macOS/OpenCore/SIP — после поднятия macOS.
 
 ## Неделя 2 — Карта графического стека macOS
 
