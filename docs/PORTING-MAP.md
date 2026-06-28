@@ -66,6 +66,7 @@
 |---|---|---|---|
 | `nv_fwsec_locate` (fwsec_locate.c) | nova `vbios.rs` | переиспользуемый локатор FWSEC (PCIR/NPDE/BIT/PmuLookupTable), без I/O | ✅ |
 | `FwsecRun.cpp` (kext) | nova `fwsec.rs::new`+`run`, `falcon.rs` | VBIOS из BAR0 ROM shadow (0x300000) → locate → DMA-буфер (IOBufferMemoryDescriptor) → patch FRTS+signature → reset_ga102 → dma_load → boot → проверка mbox0/WPR2 | 🟡 CI (kext compile-check), на железе не исполнялось |
+| `tools/fwsec_run_linux.c` (Linux-хост) | те же `driver/gsp/*` + VFIO | mmap BAR0 как `nv_mmio_t`, `VFIO_IOMMU_MAP_DMA`→IOVA в `dma_load`; оркестрация 1:1 с FwsecRun.cpp. Для HW-верификации слоя 2 headless без macOS | 📄 SRC, на железе не исполнялось (см. `docs/bench-test-fwsec-linux.md`) |
 | frts_addr/frts_size (регион WPR2) | nova `fb.rs FbLayout` + `fb/hal/ga102.rs`/`tu102.rs` | `driver/gsp/fb_layout.*`: vidmem=NV_USABLE_FB_SIZE_IN_MB×1MiB; vga_workspace из NV_PDISP_VGA_WORKSPACE_BASE; frts_base=align_down(vga,128K)-1MiB; frts_size=1MiB | 🟡 CI / 📄 SRC |
 
 ## Слой 2 — ещё НЕ портировано (следующие шаги)

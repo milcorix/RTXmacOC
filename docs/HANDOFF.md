@@ -76,7 +76,17 @@ WindowServer: (1) library validation не пускает чужой Metal-бан
   `reset_wait_mem_scrubbing` после `select_core` в `falcon.c`), D2 (отказ для
   не-V3 дескриптора в `FwsecRun.cpp`); D3 (IFR-заголовок) — помечен `TODO: verify`.
 - `RTXProbe::start()` теперь вызывает `RTXRunFwsecFrts` на Ada (turnkey).
-- Написан runbook `docs/bench-test-fwsec.md`.
+- Написаны runbook'и: `docs/bench-test-fwsec.md` (macOS-kext) и
+  `docs/bench-test-fwsec-linux.md` (Linux/VFIO, headless).
+- **Добавлен `tools/fwsec_run_linux.c`** — Linux-VFIO-хост для тех же модулей
+  `driver/gsp/*` (mmap BAR0 + VFIO_IOMMU_MAP_DMA). Позволяет получить первый 🟢
+  слоя 2 без macOS и без монитора (не требует установки ОС — live-USB).
+
+### Рекомендованный путь к первому 🟢 слоя 2
+Стенд: целевая машина (12400F+RTX, без iGPU) → **Linux live-USB headless** →
+RTX на `vfio-pci` → SSH → `tools/fwsec_run_linux`. Метрика `mbox0=0`+`WPR2 set=1`.
+Это дешевле и надёжнее macOS-стенда (нет проблемы с дисплеем/установкой). macOS-kext
+проверяется отдельно позже. Подробности — `docs/bench-test-fwsec-linux.md`.
 
 ## Как проверять на железе (ограничения стенда)
 
