@@ -54,6 +54,57 @@ typedef struct {
 /* Разобрать bin-контейнер GSP-bootloader. */
 int nv_gsp_bootloader_parse(const uint8_t *buf, size_t len, nv_gsp_bootloader_t *out);
 
+/* ===================== WPR2 layout + GspFwWprMeta (фаза 4 ч.2) ===================== */
+
+/* Константы размера GSP-heap (535.113.01). wpr_heap — ga102/ad10x (nouveau ad102.c);
+   per-GB и client_alloc — OGK gsp_fw_heap.h. TODO: verify на HW (фаза 6). */
+#define NV_GSP_WPR_HEAP_OS_CARVEOUT   (20u << 20)        /* 20 МиБ */
+#define NV_GSP_WPR_HEAP_BASE_SIZE     (8u  << 20)        /* 8 МиБ  */
+#define NV_GSP_WPR_HEAP_MIN_SIZE      (84u << 20)        /* 84 МиБ */
+#define NV_GSP_HEAP_SIZE_PER_GB_FB    (96u << 10)        /* 96 КиБ на ГБ FB */
+#define NV_GSP_HEAP_CLIENT_ALLOC_SIZE (((uint64_t)(48u << 10)) * 2048u) /* 96 МиБ */
+
+#define NV_GSP_WPR_META_SIZE     256u
+#define NV_GSP_WPR_META_MAGIC    0xdc3aae21371a60b3ULL
+#define NV_GSP_WPR_META_REVISION 1u
+
+/* Раскрой WPR2 в VRAM (адреса — смещения в FB). Порт nouveau r535_gsp_oneinit. */
+typedef struct {
+    uint64_t fb_size;
+    uint64_t frts_addr, frts_size;          /* из nv_fb_compute_frts (HW-проверено) */
+    uint64_t boot_addr, boot_size;
+    uint64_t elf_addr, elf_size;
+    uint64_t heap_addr, heap_size;          /* wpr2 heap */
+    uint64_t wpr2_addr, wpr2_size, wpr2_end;
+    uint64_t nonwpr_heap_addr, nonwpr_heap_size;
+} nv_gsp_fb_layout_t;
+
+/*
+ * Рассчитать раскрой WPR2 из размера FB и опорного региона FRTS (frts_addr/size —
+ * результат nv_fb_compute_frts, HW-проверенный). boot_size = размер payload
+ * GSP-bootloader; elf_size = размер .fwimage (radix3-mapped). Регионы режутся сверху
+ * вниз: [non-WPR heap][wpr2: meta|heap|elf|boot|frts][vga]. Возвращает NV_GSP_OK.
+ */
+int nv_gsp_fb_layout(uint64_t fb_size, uint64_t frts_addr, uint64_t frts_size,
+                     uint64_t boot_size, uint64_t elf_size, nv_gsp_fb_layout_t *out);
+
+/* Параметры sysmem-размещения прошивок (DMA-адреса в системной памяти). */
+typedef struct {
+    uint64_t radix3_lvl0_dma, radix3_elf_size;  /* sysmemAddrOfRadix3Elf, sizeOfRadix3Elf */
+    uint64_t bootloader_dma, bootloader_size;   /* sysmemAddrOfBootloader, sizeOfBootloader */
+    uint32_t boot_code_offset, boot_data_offset, boot_manifest_offset;
+    uint64_t signature_dma, signature_size;     /* sysmemAddrOfSignature, sizeOfSignature */
+    uint64_t vga_workspace_addr, vga_workspace_size;
+} nv_gsp_wpr_meta_src_t;
+
+/*
+ * Заполнить 256-байтную структуру GspFwWprMeta (buf >= 256, обнуляется внутри) из
+ * раскроя FB (lay) и sysmem-адресов (src). Порт nouveau r535_gsp_wpr_meta_init.
+ */
+int nv_gsp_wpr_meta_build(uint8_t *buf, size_t buflen,
+                          const nv_gsp_fb_layout_t *lay,
+                          const nv_gsp_wpr_meta_src_t *src);
+
 /* Размеры radix3 для образа размером fwimage_size:
  *   n2  = ceil(fwimage_size / 4K)          — записей в lvl2 (по странице образа);
  *   lvl2_pages = ceil(n2*8 / 4K)           — страниц под lvl2 (= записей в lvl1);

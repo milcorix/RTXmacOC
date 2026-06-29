@@ -132,8 +132,13 @@ WPR2-границы, GFW boot, `NV_PGSP_QUEUE_HEAD`.
      `driver/gsp/gsp_fw.{h,c}` — извлечение `.fwimage`/`.fwsignature_ad10x` из ELF GSP-RM,
      разбор `RM_RISCV_UCODE_DESC` (bootloader), билдер radix3 (3×4K, u64). Проверено на
      реальных gsp/bootloader-535.113.01 (`make gsp-stage-test`): секции/desc/radix3 согласованы.
-   - ⏳ НЕ сделано (фаза 4 ч.2 + 5-6): `GspFwWprMeta` (математика WPR2-layout из FbLayout) +
-     libos init-args + оркестрация (boot GSP→Booter с реальным WPR-handle→`mbox0==0`→RISC-V active).
+   - 🟢 **фаза 4 ч.2 (офлайн) 2026-06-29**: `nv_gsp_fb_layout` (раскрой WPR2: frts→boot→elf→
+     heap→wpr2→non-WPR heap) + `nv_gsp_wpr_meta_build` (256-байтная `GspFwWprMeta`).
+     Проверено офлайн на FB=12282 МиБ с HW-якорем FRTS (`make gsp-stage-test`): раскрой
+     внутри FB, поля meta согласованы. Heap=126 МиБ (формула 535.113.01). Сверено с r535.
+   - ⏳ НЕ сделано (фаза 5-6): libos init-args + оркестрация на железе (выделить sysmem под
+     radix3/bootloader/sig/meta/libos, boot GSP-фалкона с libos-handle, Booter с реальным
+     WPR-handle → `mbox0==0` → RISC-V active).
 5. **GSP-RM + очереди RPC** (`open-gpu-kernel-modules` `message_queue_priv.h`,
    nouveau `r535.c`) → первый RPC. ← **метрика слоя 2** (задача 7).
 

@@ -200,3 +200,19 @@ gspFwHeapOffset@120/Size@128, gspFwOffset@136, bootBinOffset@144, frtsOffset@152
 gspFwWprEnd@168, fbSize@176, vgaWorkspaceOffset@184/Size@192, bootCount@200,
 [union partitionRpc…/crashReport… 8-байт-выровнен], gspFwHeapVfPartitionCount(u8)+padding[7],
 verified(u64). Математика WPR2-layout (gspFwWprStart/End, heap, frts) — из FbLayout (фаза 4-2).
+
+## WPR2-раскрой + GspFwWprMeta (задача 6, фаза 4 ч.2) — ✅ офлайн 2026-06-29
+
+`driver/gsp/gsp_fw.{h,c}`: `nv_gsp_fb_layout` (раскрой WPR2) + `nv_gsp_wpr_meta_build`
+(256-байтная структура). Проверено офлайн на FB=12282 МиБ (HW-значение) с опорой на
+HW-проверенный FRTS (`nv_fb_compute_frts`): `make gsp-stage-test`.
+
+| Наш код | Upstream | Что | Статус |
+|---|---|---|---|
+| `nv_gsp_fb_layout` | nouveau `r535_gsp_oneinit` | раскрой сверху вниз: frts(анкер)→boot(align 4K)→elf(64K)→heap(1M)→wpr2(1M, −sizeof meta)→non-WPR heap(1M); wpr2_end=frts_end | ✅ офлайн (wpr2=0x2f5400000..0x2ff900000, внутри 12ГБ) |
+| heap.size | nouveau ad102.c + OGK gsp_fw_heap.h | os_carveout(20M)+base(8M)+align(96K·fb_gb,1M)+align(client 96M,1M), max(min 84M) | ✅ 126 МиБ при 12 ГБ FB. TODO: verify HW |
+| `nv_gsp_wpr_meta_build` | nouveau `r535_gsp_wpr_meta_init` | поля GspFwWprMeta (magic@0…verified@248), FB-адреса из раскроя + sysmem-DMA radix3/bootloader/sig | ✅ офлайн (magic/wprStart/End/fbSize верны) |
+
+Остаётся (фаза 5-6): libos init-args; оркестрация на железе (выделить sysmem под
+radix3/bootloader/sig/meta/libos, boot GSP-фалкона с libos-handle, Booter с реальным
+WPR-handle=meta DMA → mbox0==0 → RISC-V active).

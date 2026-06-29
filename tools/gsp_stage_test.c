@@ -15,6 +15,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+typedef unsigned long long ull;
+
 static uint64_t ld64(const uint8_t *p)
 { uint64_t v = 0; for (int i = 0; i < 8; i++) v |= (uint64_t)p[i] << (8 * i); return v; }
 
@@ -84,7 +86,42 @@ int main(void)
            (unsigned long long)ld64(lvl2 + (size_t)(n2 - 1) * 8));
 
     free(lvl0); free(lvl1); free(lvl2);
-    printf(ok ? "\n=== РЕЗУЛЬТАТ: OK (секции/desc/radix3 согласованы) ===\n"
+
+    /* --- WPR2 layout + GspFwWprMeta (FB и FRTS — HW-значения из FWSEC-лога) --- */
+    const uint64_t FB   = 12282ull << 20;     /* 12282 МиБ (NV_USABLE_FB_SIZE) */
+    const uint64_t FRTS = 0x2ff800000ull;     /* nv_fb_compute_frts (HW-проверено) */
+    const uint64_t FRTS_SZ = 0x100000ull;
+    nv_gsp_fb_layout_t lay;
+    rc = nv_gsp_fb_layout(FB, FRTS, FRTS_SZ, b.data_size, s.fwimage_size, &lay);
+    if (rc != NV_GSP_OK) { fprintf(stderr, "FAIL: nv_gsp_fb_layout rc=%d\n", rc); return 1; }
+    printf("WPR2 layout (FB=%llu МиБ):\n", (unsigned long long)(FB >> 20));
+    printf("  non-WPR heap @0x%llx sz=0x%llx\n", (ull)lay.nonwpr_heap_addr, (ull)lay.nonwpr_heap_size);
+    printf("  wpr2 @0x%llx sz=0x%llx end=0x%llx\n", (ull)lay.wpr2_addr, (ull)lay.wpr2_size, (ull)lay.wpr2_end);
+    printf("  heap @0x%llx sz=0x%llx (%llu МиБ)\n", (ull)lay.heap_addr, (ull)lay.heap_size, (ull)(lay.heap_size>>20));
+    printf("  elf  @0x%llx sz=0x%llx\n", (ull)lay.elf_addr, (ull)lay.elf_size);
+    printf("  boot @0x%llx sz=0x%llx\n", (ull)lay.boot_addr, (ull)lay.boot_size);
+    printf("  frts @0x%llx sz=0x%llx\n", (ull)lay.frts_addr, (ull)lay.frts_size);
+
+    uint8_t meta[NV_GSP_WPR_META_SIZE];
+    nv_gsp_wpr_meta_src_t src = {
+        .radix3_lvl0_dma = L1, .radix3_elf_size = s.fwimage_size,
+        .bootloader_dma = 0x30000000ull, .bootloader_size = b.data_size,
+        .boot_code_offset = b.code_offset, .boot_data_offset = b.data_offset,
+        .boot_manifest_offset = b.manifest_offset,
+        .signature_dma = 0x31000000ull, .signature_size = s.sig_size,
+        .vga_workspace_addr = FRTS + FRTS_SZ, .vga_workspace_size = 0,
+    };
+    rc = nv_gsp_wpr_meta_build(meta, sizeof(meta), &lay, &src);
+    if (rc != NV_GSP_OK) { fprintf(stderr, "FAIL: wpr_meta_build rc=%d\n", rc); return 1; }
+    if (ld64(meta + 0)   != NV_GSP_WPR_META_MAGIC) { printf("  ✗ magic\n"); ok = 0; }
+    if (ld64(meta + 24)  != s.fwimage_size)        { printf("  ✗ sizeOfRadix3Elf\n"); ok = 0; }
+    if (ld64(meta + 112) != lay.wpr2_addr)         { printf("  ✗ gspFwWprStart\n"); ok = 0; }
+    if (ld64(meta + 168) != lay.wpr2_end)          { printf("  ✗ gspFwWprEnd\n"); ok = 0; }
+    if (ld64(meta + 176) != FB)                    { printf("  ✗ fbSize\n"); ok = 0; }
+    printf("GspFwWprMeta: magic=0x%llx wprStart=0x%llx wprEnd=0x%llx heapSize=0x%llx (256б)\n",
+           (ull)ld64(meta+0), (ull)ld64(meta+112), (ull)ld64(meta+168), (ull)ld64(meta+128));
+
+    printf(ok ? "\n=== РЕЗУЛЬТАТ: OK (секции/desc/radix3/WPR2-layout/WprMeta согласованы) ===\n"
               : "\n=== РЕЗУЛЬТАТ: FAIL (см. ✗) ===\n");
     return ok ? 0 : 1;
 }
