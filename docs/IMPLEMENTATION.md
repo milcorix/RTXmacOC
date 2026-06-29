@@ -120,8 +120,15 @@ WPR2-границы, GFW boot, `NV_PGSP_QUEUE_HEAD`.
 3. **Запуск FWSEC-FRTS** — `reset → dma_load → boot(mbox0=0) → mbox0==0 &&
    nv_wpr2_is_set()`. ← создан WPR2.
 4. **Booter Loader** (порт `firmware/booter.rs`) → грузит GSP-RM в WPR2, старт RISC-V.
+   - 🟢 **фундамент (фазы 1-2) сделан 2026-06-29**: шим загрузки/распаковки блобов
+     `driver/gsp/fw_blob.h` + `tools/fw_blob_linux.c` (zstd); парсер контейнера
+     `driver/gsp/booter.{h,c}` (`nv_booter_parse`). Офлайн-проверено на реальных
+     `booter_load/booter_unload-535.113.01`: контейнер разобран, инварианты выполнены
+     (`make booter-parse-test`). Смещения — `PORTING-MAP.md`.
+   - ⏳ НЕ сделано (фазы 3-6): regs SEC2 + запуск Booter на SEC2; `GspFwWprMeta`;
+     radix3-маппинг GSP-RM; libos; оркестрация (boot GSP→Booter→RISC-V active).
 5. **GSP-RM + очереди RPC** (`open-gpu-kernel-modules` `message_queue_priv.h`,
-   nouveau `r535.c`) → первый RPC. ← **метрика слоя 2**.
+   nouveau `r535.c`) → первый RPC. ← **метрика слоя 2** (задача 7).
 
 ---
 

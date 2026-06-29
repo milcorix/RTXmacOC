@@ -7,6 +7,8 @@ build/
 pcie_probe
 tools/nv_mmio_linux
 tools/fwsec_run_linux
+tools/vbios_dump
+tools/booter_parse_test
 
 # рантайм-артефакты HW-прогона FWSEC (локальные, не в репо)
 tools/fwsec-frts.log

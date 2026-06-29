@@ -136,3 +136,26 @@ WPR2-decode `>>4<<12`/`hi_val!=0`, BCR_CTRL, BROM, fuse, VGA_WORKSPACE); fb_layo
 |---|---|---|---|
 | `nv_wait_gfw_boot_completed` | nova `Gpu::new` ждёт GFW_BOOT | поллинг `0x118234 & 0xFF==0xFF` | ✅ HW 2026-06-29 |
 | `walk_images` sig | nova `PciRomHeader` `0xAA55\|0x4E56` | обе сигнатуры образа | ✅ HW 2026-06-29 |
+
+## Контейнер Booter (задача 6, фазы 1-2) — ✅ разобран офлайн 2026-06-29
+
+Booter — внешний подписанный блоб (`booter_load`/`booter_unload` из linux-firmware),
+формат «bin»-контейнер с Heavy-Secure firmware v2 (НЕ VBIOS-дескриптор). Парсер
+`driver/gsp/booter.{h,c}`; загрузка/распаковка — шим `fw_blob` (`tools/fw_blob_linux.c`,
+zstd). Смещения сверены с дампом `booter_load-535.113.01.bin` (всё file-relative, кроме
+os_*/app/patch_loc — они data-relative).
+
+| Наш код | Upstream | Структура/смещения |
+|---|---|---|
+| nv_bin_hdr (внутр.) | nouveau `nvfw/fw.h` `nvfw_bin_hdr` | magic u32@0 (`0x10de`), ver@4, size@8, header_offset@12, data_offset@16, data_size@20 |
+| HS header v2 | nouveau `nvfw/hs.h` `nvfw_hs_header_v2` (nova `firmware/hs.rs`) | sig_prod_offset@0, sig_prod_size@4, **patch_loc_off@8**, patch_sig_off@12, meta_data_offset@16, meta_data_size@20, **num_sig_off@24**, load_hdr_off@28, header_size@32. Поля `*_off` — АБСОЛЮТНЫЕ смещения к значениям/структурам |
+| load header v2 | nouveau `nvfw/hs.h` `nvfw_hs_load_header_v2` | os_code_offset@0, os_code_size@4, os_data_offset@8, os_data_size@12, num_apps@16, app[]{offset,size,data_offset,data_size}@20 (по 16б) |
+| `nv_booter_parse` | nova `BinFirmware`+`HsFirmwareV2::new` | разбор контейнера, `num_sig = u32@num_sig_off`, `patch_loc = u32@patch_loc_off`, `pkc_data_offset = patch_loc - os_data_offset` |
+
+Подтверждено дампом 535.113.01: bin magic `0x10de`, data@888 size=0xd700; sig@60
+size=768 → num_sig=2; load_hdr@852: os_code(0,256)+app(256,30208)+os_data(30464,24576)=55040;
+patch_loc=30480 → pkc_data_offset=16; meta_data@836 (12б)=[1,1,3] (`TODO: verify` —
+вероятно engine_id_mask SEC2=1 / ucode_id=3, нужно сверить с `booter.rs HsSignatureParams`).
+
+НЕ портировано (фазы 3-6): запуск на SEC2 (regs SEC2-базы), `GspFwWprMeta`, radix3,
+libos, оркестрация boot. Источники: nova `firmware/{booter,gsp}.rs`, nouveau `r535`.
