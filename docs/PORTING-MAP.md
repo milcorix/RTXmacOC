@@ -24,7 +24,7 @@
 
 | Наш код | Upstream (nova `vbios.rs`/`firmware.rs`) | Структура/смещения |
 |---|---|---|
-| PciRomHeader | `PciRomHeader` | sig u16@0 (`0xAA55`), pci_data_ptr u16@0x18 |
+| PciRomHeader | `PciRomHeader` | sig u16@0 (`0xAA55` ЛИБО `0x4E56`="NV" для NVIDIA-расширенных образов), pci_data_ptr u16@0x18 — ✅ сверено 2026-06-29 с nova `match {0xAA55\|0x4E56}`, подтверждено дампом (FWSEC-образ начинается с 0x4E56) |
 | PCIR | `PcirStruct` | sig@0, vendor@4, device@6, len u16@0x0A, image_len@0x10, code_type@0x14, last@0x15 |
 | NPDE | `NpdeStruct` | @ `(pcir+len+0xF)&~0xF`; sig "NPDE", subimage_len@0x08, last@0x0A |
 | BIT header | `BitHeader` | id `0xB8FF`, sig "BIT\0", header_size@8, token_size@9, token_entries@10 |
@@ -110,5 +110,29 @@ WPR2-decode `>>4<<12`/`hi_val!=0`, BCR_CTRL, BROM, fuse, VGA_WORKSPACE); fb_layo
 
 **Верификационная заметка (на стенде):**
 - **D3** (`fwsec_locate.c`): IFR-заголовок (`NVGI`) не разбирается; на Ada PROM-смещение
-  обычно уже применено → скан с 0 корректен. Проверить по дампу ROM из BAR0+0x300000:
-  первый word должен быть `0xAA55`, а не `NVGI`. Помечено `TODO: verify` в коде.
+  обычно уже применено → скан с 0 корректен. ✅ Подтверждено дампом 2026-06-29:
+  PROM (BAR0+0x300000) начинается с `0xAA55`, `NVGI` в дампе НЕТ → IFR-разбор не нужен на AD104.
+
+## Аудит против nova-core (2026-06-29) — HW-верификация, найдено 2 бага
+
+Прогон FWSEC-FRTS на реальной RTX 4070S (Linux/VFIO). Метрика достигнута:
+`mbox0=0`, `WPR2 set=1 [0x2ff800000..0x2ff8e0000]`. Доказательство:
+`docs/hw-dumps/20260629-rtx4070s-fwsec-frts-linux-OK.log` (+ дамп PROM `...-prom-shadow.bin`).
+Два бага, невидимые на CI/чтении, всплыли только на железе:
+
+- **D4** (`falcon.c`/`falcon.h`: `nv_wait_gfw_boot_completed`, `nv_gfw_boot_raw`): после
+  reset/FLR карта заново гоняет GFW boot (devinit из VBIOS). Старый код читал FB-регистры
+  сразу → `NV_USABLE_FB_SIZE_IN_MB` = `0xBADF5108` (priv read-fault) → мусорный FRTS-регион.
+  Добавлено ожидание `SCRATCH_GROUP_05.GFW_BOOT == 0xFF` (поллинг ≤4с, как nova при init GPU).
+  Подключено в `fwsec_run_linux.c` и `FwsecRun.cpp` ПЕРЕД чтением FB.
+  HW: до ожидания `0x00000001`, после `0x000003FF`; VRAM=12282 MiB.
+- **D5** (`fwsec_locate.c` `walk_images`): принимал только сигнатуру образа `0xAA55`.
+  NVIDIA-расширенные образы (NBSI/FWSEC, code_type 0xE0) начинаются с `0x4E56` ("NV") —
+  `walk` останавливался на EFI-образе, FWSEC не находился (`rc=NOIMG`). Сверено с nova
+  `vbios.rs` (`0xAA55 | 0x4E56`). На дампе: образы [0]PciAt@0 [1]EFI@0xfc00 [2]FWSEC@0x24c00
+  [3]FWSEC@0x2ac00(last); desc V3 @0x45818 (GSP engine=0x400, ucode_id=9, sig_count=2).
+
+| Наш код | Upstream | Что | Статус |
+|---|---|---|---|
+| `nv_wait_gfw_boot_completed` | nova `Gpu::new` ждёт GFW_BOOT | поллинг `0x118234 & 0xFF==0xFF` | ✅ HW 2026-06-29 |
+| `walk_images` sig | nova `PciRomHeader` `0xAA55\|0x4E56` | обе сигнатуры образа | ✅ HW 2026-06-29 |

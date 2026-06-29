@@ -116,4 +116,16 @@ int nv_falcon_dma_load_ga102(const nv_mmio_t *io, uint32_t base, uint32_t falcon
 int nv_wpr2_is_set(const nv_mmio_t *io, uint64_t *out_lo, uint64_t *out_hi);
 int nv_gfw_boot_completed(const nv_mmio_t *io);
 
+/* Сырое значение scratch-регистра прогресса GFW boot (для диагностики). */
+uint32_t nv_gfw_boot_raw(const nv_mmio_t *io);
+
+/*
+ * Ждать завершения GFW boot (devinit из VBIOS, который тренирует FB и открывает
+ * priv-доступ к FB-регистрам). Поллит SCRATCH_GROUP_05.GFW_BOOT до значения
+ * COMPLETED (0xFF) или таймаута. Источник: nova-core ждёт GFW_BOOT при инициализации
+ * GPU перед чтением раскладки FB. Обязателен после reset/FLR карты, иначе чтение
+ * NV_USABLE_FB_SIZE_IN_MB возвращает priv-фолт (0xBADFxxxx).
+ */
+int nv_wait_gfw_boot_completed(const nv_mmio_t *io, uint32_t timeout_us);
+
 #endif /* RTXMACOC_FALCON_H */

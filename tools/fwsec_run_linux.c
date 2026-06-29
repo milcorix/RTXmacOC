@@ -212,7 +212,26 @@ static int run_fwsec(const nv_mmio_t *io, uint64_t dma_iova, uint8_t *dma_buf, s
     /* Диагностика состояния карты до прогона. */
     uint32_t boot0 = bar_rd(io->ctx, 0x0);
     printf("PMC_BOOT_0 = 0x%08x\n", boot0);
-    printf("GFW boot completed = %d\n", nv_gfw_boot_completed(io));
+
+    /* vfio-pci при привязке делает FLR — после сброса карта заново гоняет devinit
+       (GFW boot). Дождаться завершения, иначе FB-регистры читаются как priv-фолт
+       0xBADFxxxx. Поллим до 4с (как nova-core при инициализации GPU). */
+    uint32_t gfw_raw = nv_gfw_boot_raw(io);
+    printf("GFW boot (до ожидания) = 0x%08x (completed=%d)\n",
+           gfw_raw, (gfw_raw & 0xFFu) == 0xFFu);
+    int gfw_rc = nv_wait_gfw_boot_completed(io, 4u * 1000u * 1000u);
+    gfw_raw = nv_gfw_boot_raw(io);
+    printf("GFW boot (после ожидания ≤4с) = 0x%08x rc=%d\n", gfw_raw, gfw_rc);
+    if (gfw_rc != NV_OK) {
+        fprintf(stderr, "FAIL: GFW boot не завершился за 4с — карта не прошла devinit "
+                        "после reset/FLR.\n");
+        fprintf(stderr, "  диагностика: HWCFG2(GSP)=0x%08x USABLE_FB_MB=0x%08x "
+                        "BOOT_0=0x%08x\n",
+                bar_rd(io->ctx, NV_PGSP_FALCON_HWCFG2),
+                bar_rd(io->ctx, NV_USABLE_FB_SIZE_IN_MB), boot0);
+        return -1;
+    }
+
     uint64_t vram = nv_fb_vidmem_size(io);
     printf("VRAM usable = %llu MiB (0x%llx байт)\n",
            (unsigned long long)(vram >> 20), (unsigned long long)vram);
@@ -240,10 +259,24 @@ static int run_fwsec(const nv_mmio_t *io, uint64_t dma_iova, uint8_t *dma_buf, s
     printf("VBIOS ROM-shadow: первые байты %02x %02x (ожидается 55 AA)\n",
            vbios[0], vbios[1]);
 
+    /* Дамп прочитанного PROM-shadow на диск для офлайн-разбора структуры. */
+    {
+        FILE *df = fopen("/tmp/rtx-prom.bin", "wb");
+        if (df) {
+            size_t w = fwrite(vbios, 1, vbios_len, df);
+            fclose(df);
+            printf("PROM-shadow дамп: /tmp/rtx-prom.bin (%zu байт)\n", w);
+        } else {
+            printf("PROM-shadow дамп: не удалось открыть /tmp/rtx-prom.bin\n");
+        }
+    }
+
     /* 2. Локализация и парсинг дескриптора FWSEC. */
     nv_fwsec_location_t loc;
-    if (nv_fwsec_locate(vbios, vbios_len, &loc) != NV_FWSEC_LOC_OK) {
-        fprintf(stderr, "FAIL: FWSEC не найден в VBIOS (см. D3: возможен IFR-заголовок)\n");
+    int lrc = nv_fwsec_locate(vbios, vbios_len, &loc);
+    if (lrc != NV_FWSEC_LOC_OK) {
+        fprintf(stderr, "FAIL: FWSEC не найден в VBIOS, nv_fwsec_locate rc=%d "
+                        "(-1 NOSIG, -2 NOIMG, -3 PARSE, -4 BOUNDS)\n", lrc);
         free(vbios); return -1;
     }
     printf("FWSEC desc @ vbios+0x%zx\n", loc.desc_abs);

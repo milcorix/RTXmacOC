@@ -1,0 +1,35 @@
+=== run-fwsec-detached 2026-06-29T17:11:49Z ===
+kernel: 6.18.36-1-MANJARO
+-- грейс 6с перед гашением экрана --
+-- stop gdm + gpu-процессы --
+-- unbind fbcon (vtcon) --
+/home/alex/Документы/RTXmacOC/probe/tools/run-fwsec-detached.sh: строка 75: /sys/class/graphics/fbcon/bind: Отказано в доступе
+-- unload nvidia --
+   driver of 0000:01:00.0 after unload: (none)
+   0000:01:00.0 -> vfio-pci
+   0000:01:00.1 -> vfio-pci
+=== HARNESS ===
+VFIO: устройство 0000:01:00.0, IOMMU-группа 11
+VFIO: BAR0 смаплен, size=0x1000000
+VFIO: Memory Space + Bus Master включены (CMD=0x0007)
+DMA-буфер: VA=0x7fce1fccd000 IOVA=0x10000000 size=0x100000
+PMC_BOOT_0 = 0x194000a1
+GFW boot (до ожидания) = 0x00000001 (completed=0)
+GFW boot (после ожидания ≤4с) = 0x000003ff rc=0
+VRAM usable = 12282 MiB (0x2ffa00000 байт)
+FRTS region addr=0x2ff800000 size=0x100000
+VBIOS ROM-shadow: первые байты 55 aa (ожидается 55 AA)
+PROM-shadow дамп: /tmp/rtx-prom.bin (1048576 байт)
+FWSEC desc @ vbios+0x45818
+desc: version=3 hdr_size=812 imem_load=63232 dmem_load=3456 engine_id_mask=0x400 ucode_id=9 sig_count=2 sig_versions=0x3 pkc=2852
+signature: fuse_ver=1 idx=1 @ vbios+0x459c4
+Falcon reset OK
+Falcon dma_load OK
+FWSEC done: mbox0=0x00000000 mbox1=0x00000000 WPR2 set=1 [0x2ff800000..0x2ff8e0000]
+*** FWSEC-FRTS OK, WPR2 создан ***
+
+=== РЕЗУЛЬТАТ: OK (WPR2 создан) ===
+=== harness rc=0 ===
+-- [restore] вернуть GPU nvidia и поднять gdm --
+   card driver now: nvidia  audio: 
+=== DONE 2026-06-29T17:12:12Z ===

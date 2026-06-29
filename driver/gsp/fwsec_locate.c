@@ -6,7 +6,16 @@
 #include "fwsec_locate.h"
 #include <string.h>
 
-#define ROM_SIG              0xAA55u
+/*
+ * Сигнатура начала ROM-образа. nova vbios.rs (PciRomHeader): допускаются ДВЕ —
+ *   0xAA55 — стандартный PCI expansion ROM (образы PciAt/EFI);
+ *   0x4E56 — "NV", NVIDIA-расширенные образы (NBSI/FWSEC) — у них тот же layout
+ *            (pci_data_ptr@0x18 → PCIR/NPDS, code_type@0x14), но иной магик.
+ * Подтверждено дампом RTX 4070S: FWSEC-образ (code_type 0xE0) начинается с 0x4E56.
+ * (docs/hw-dumps/20260629-rtx4070s-prom-shadow.bin).
+ */
+#define ROM_SIG_PCI          0xAA55u
+#define ROM_SIG_NV           0x4E56u
 #define CODE_TYPE_PCIAT      0x00u
 #define CODE_TYPE_NBSI       0x70u
 #define CODE_TYPE_FWSEC      0xE0u
@@ -50,7 +59,8 @@ static int walk_images(const uint8_t *buf, size_t len, struct image *imgs, int m
     size_t off = 0;
     int n = 0;
     while (n < max && fits(off, 0x1A, len)) {
-        if (le16(buf + off) != ROM_SIG) break;
+        uint16_t sig = le16(buf + off);
+        if (sig != ROM_SIG_PCI && sig != ROM_SIG_NV) break;
         uint16_t pcir_ptr = le16(buf + off + 0x18);
         size_t pcir = off + pcir_ptr;
         if (!fits(pcir, 0x16, len)) break;

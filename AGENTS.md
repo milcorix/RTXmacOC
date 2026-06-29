@@ -21,9 +21,9 @@
 
 1. **PCIe bring-up** — найти карту, смапить BAR0, прочитать `PMC_BOOT_0`.
    🟡 код есть и компилируется в CI; **на железе не запускался**.
-2. **GSP bring-up** — поднять GPU через GSP, наладить RPC. 🔨 текущий фокус (код
-   🟡 CI / 📄 SRC, на железе не исполнялся).
-   План: `docs/gsp-bringup-notes.md`.
+2. **GSP bring-up** — поднять GPU через GSP, наладить RPC. 🔨 текущий фокус.
+   FWSEC-FRTS→WPR2 — 🟢 подтверждён на железе (2026-06-29, Linux/VFIO). Дальше:
+   Booter→GSP-RM→RPC (задачи 6–7, ещё не начаты). План: `docs/gsp-bringup-notes.md`.
 3. Memory management (GMMU/VRAM).
 4. Command submission (каналы).
 5. Display / modeset — **вывод картинки**. Конечная видимая цель.
@@ -112,13 +112,17 @@ docs/                   архитектура, роадмап, конспект
   BAR0=`0x52000000`, `PMC_BOOT_0=0x194000A1` (Ada AD104, rev A1), адреса WPR2-регистров.
   См. `docs/hw-dumps/`.
 - Слой 1: 🟢 декод подтверждён железом; загрузка НАШего kext на macOS — ждёт стенда.
-- Слой 2: 🟡/📄 цепочка **FWSEC-FRTS дописана в коде** и самодостаточна
-  (`driver/gsp/{falcon,fwsec_patch,fwsec_locate,fb_layout}.*` + kext `driver/RTXProbe/FwsecRun.*`),
-  сверена с nova-core, **на железе не исполнялась**. НЕ начаты: Booter (задача 6),
-  очереди RPC (задача 7).
+- Слой 2: 🟢 **FWSEC-FRTS ПОДТВЕРЖДЁН НА ЖЕЛЕЗЕ 2026-06-29** (RTX 4070S, Linux/VFIO):
+  `mbox0=0` И `WPR2 set=1 [0x2ff800000..0x2ff8e0000]`. Доказательство:
+  `docs/hw-dumps/20260629-rtx4070s-fwsec-frts-linux-OK.log`. Портируемая логика
+  `driver/gsp/{falcon,fwsec_patch,fwsec_locate,fb_layout}.*` теперь 🟢. На железе нашли
+  2 бага (GFW-wait после FLR; сигнатура образа `0x4E56`) — исправлены, см. PORTING-MAP
+  «аудит 2026-06-29». macOS-kext-шим `driver/RTXProbe/FwsecRun.*` всё ещё 🟡 (на macOS
+  не прогонялся; GFW-wait в него добавлен). НЕ начаты: Booter (задача 6), RPC (задача 7).
 - Спека: `.kiro/specs/rtx-tahoe-full-support/` (requirements/design/tasks).
-- Открытое решение: A — верифицировать FWSEC-FRTS на стенде (есть Haswell-станция
-  для установки macOS на USB-SSD), либо B — продолжать порт Booter+RPC.
+- Прогон без ребута/монитора: `tools/run-fwsec-detached.sh` (Linux/VFIO, возвращает GUI).
+- Открытое решение ЗАКРЫТО (выбран A, выполнен). Дальше: задача 6 (Booter→GSP-RM).
+  Кандидат-блобы Booter/GSP-RM найдены: `/usr/lib/firmware/nvidia/ad10x/gsp/` (проверить лицензию).
 - Дальше по `docs/gsp-bringup-notes.md` §7.
 
 ## Ключевые источники (референс-база)

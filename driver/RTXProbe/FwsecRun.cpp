@@ -138,6 +138,18 @@ IOReturn RTXRunFwsecFrts(IOPCIDevice *pci, volatile void *bar0Base)
     io.wr     = bar_wr;
     io.udelay = bar_udelay;
 
+    /* Дождаться завершения GFW boot (devinit из VBIOS) до чтения FB-регистров.
+       После сброса карты (FLR/reset) FB-регистры до завершения GFW читаются как
+       priv-фолт 0xBADFxxxx. Поллим до 4с (как nova-core при инициализации GPU). */
+    uint32_t gfwRaw = nv_gfw_boot_raw(&io);
+    IOLog("RTXFwsec: GFW boot (до ожидания)=0x%08x\n", gfwRaw);
+    if (nv_wait_gfw_boot_completed(&io, 4u * 1000u * 1000u) != NV_OK) {
+        IOLog("RTXFwsec: GFW boot не завершился за 4с (raw=0x%08x) — карта не прошла devinit\n",
+              nv_gfw_boot_raw(&io));
+        return kIOReturnNotReady;
+    }
+    IOLog("RTXFwsec: GFW boot completed (raw=0x%08x)\n", nv_gfw_boot_raw(&io));
+
     /* Регион WPR2/FRTS из объёма VRAM (fb_layout). */
     uint64_t frtsAddr = 0, frtsSize = 0;
     if (nv_fb_compute_frts(&io, &frtsAddr, &frtsSize) != 0) {

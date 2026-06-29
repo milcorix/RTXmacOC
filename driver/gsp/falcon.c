@@ -268,3 +268,20 @@ int nv_gfw_boot_completed(const nv_mmio_t *io)
     uint32_t v = rd(io, NV_PGC6_AON_SECURE_SCRATCH_GROUP_05_0_GFW_BOOT);
     return (v & 0xFFu) == NV_GFW_BOOT_PROGRESS_COMPLETED;
 }
+
+uint32_t nv_gfw_boot_raw(const nv_mmio_t *io)
+{
+    return rd(io, NV_PGC6_AON_SECURE_SCRATCH_GROUP_05_0_GFW_BOOT);
+}
+
+int nv_wait_gfw_boot_completed(const nv_mmio_t *io, uint32_t timeout_us)
+{
+    uint32_t waited = 0;
+    for (;;) {
+        uint32_t v = rd(io, NV_PGC6_AON_SECURE_SCRATCH_GROUP_05_0_GFW_BOOT);
+        if ((v & 0xFFu) == NV_GFW_BOOT_PROGRESS_COMPLETED) return NV_OK;
+        if (waited >= timeout_us) return NV_ERR_TIMEOUT;
+        udelay(io, 1000u); /* шаг поллинга 1мс — GFW занимает десятки-сотни мс */
+        waited += 1000u;
+    }
+}

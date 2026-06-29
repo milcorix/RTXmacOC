@@ -12,12 +12,15 @@
 
 ## ⚠️ Статус проверки (честно)
 
-**На реальном железе не подтверждено НИЧЕГО.** Ни один модуль не запускался на
-карте/в macOS. Легенда статусов:
+**Портируемая логика слоя 2 (`driver/gsp/*`) ПОДТВЕРЖДЕНА НА ЖЕЛЕЗЕ** (Linux/VFIO,
+RTX 4070S, 2026-06-29): FWSEC-FRTS отработал, `mbox0=0`, `WPR2 set=1`. macOS-kext-шим
+(`FwsecRun.cpp`: IOPCIDevice/IOBufferMemoryDescriptor) — всё ещё 🟡 (на самой macOS не
+прогонялся). Легенда статусов:
 
-- 🟢 **HW** — подтверждено логом с реального железа. **Есть первый: декод
-  `PMC_BOOT_0` подтверждён на RTX 4070 Super** (Windows/RW-Everything,
-  `0x194000A1` → Ada AD104, rev A1). См. `docs/hw-dumps/20260628-rtx4070s-pmc_boot0-windows.md`.
+- 🟢 **HW** — подтверждено логом с реального железа. Есть:
+  - декод `PMC_BOOT_0`=`0x194000A1` (Ada AD104 rev A1) — Windows/RW-Everything + Linux/VFIO;
+  - **FWSEC-FRTS: `mbox0=0`, `WPR2 set=1 [0x2ff800000..0x2ff8e0000]`** (Linux/VFIO,
+    `docs/hw-dumps/20260629-rtx4070s-fwsec-frts-linux-OK.log`).
 - 🟡 **CI** — только компилируется (есть CI-лог GitHub Actions); поведение на
   железе НЕ проверено.
 - 📄 **SRC** — раскладка/логика совпадает с исходником nova-core при чтении кода;
@@ -39,7 +42,7 @@ Big Sur+ нет (library validation + приватные интерфейсы + 
 | Слой | Что | Статус | Файлы |
 |---|---|---|---|
 | 1 | PCIe bring-up, чтение `PMC_BOOT_0` | 🟡 CI (на железе не запускался) | `pcie_probe.c`, `ada_regs.h`, `driver/RTXProbe/`, `driver/RTXProbeDext/` |
-| 2 | GSP bring-up | 🟡 CI / 📄 SRC (на железе не исполнялось) | `tools/vbios_dump.c`, `falcon_regs.h`, `driver/gsp/*` |
+| 2 | GSP bring-up (FWSEC-FRTS→WPR2) | 🟢 HW 2026-06-29 (Linux/VFIO: mbox0=0, WPR2 set) для `driver/gsp/*`; macOS-kext-шим `FwsecRun.cpp` — 🟡 CI | `tools/{vbios_dump,fwsec_run_linux}.c`, `falcon_regs.h`, `driver/gsp/*`, `driver/RTXProbe/FwsecRun.*` |
 | 3–6 | память/каналы/дисплей/Metal | ⏳ (дисплей — заблокирован Apple, см. graphics-stack) | — |
 
 ---
