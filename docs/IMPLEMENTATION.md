@@ -145,9 +145,16 @@ WPR2-границы, GFW boot, `NV_PGSP_QUEUE_HEAD`.
      **GSP RISC-V active=1** (CPUCTL=0x80). GSP-RM реально исполняется на карте.
      Доказательство: `docs/hw-dumps/20260630-rtx4070s-gsp-rm-boot-OK.log`. Новые falcon-помощники:
      `nv_falcon_gsp_reset_riscv`, `nv_falcon_riscv_active`, `nv_falcon_write_os_version`.
-5. **GSP-RM + очереди RPC** — задача 7: command/status очереди в sysmem (порт
-   `message_queue_priv.h`, nouveau `r535.c`), первый RPC `GSP_INIT_DONE` = «GSP ответил».
-   ← **финальная метрика слоя 2**. (Booter уже стартовал RISC-V — осталась только RPC-обвязка.)
+5. **GSP-RM + очереди RPC** — задача 7: 🟢🟢 **РЕШЕНА НА ЖЕЛЕЗЕ 2026-06-30 — МЕТРИКА
+   СЛОЯ 2 ДОСТИГНУТА**. Тот же оркестратор `tools/gsp_boot_linux.c` после бута: очереди
+   cmdq/msgq + rmargs (`GSP_ARGUMENTS_CACHED`) → **`SET_SYSTEM_INFO`+`SET_REGISTRY` в cmdq
+   ДО бута** (BAR-физадреса+BDF / 2 ключа) → дренаж msgq с исполнением
+   **`GSP_RUN_CPU_SEQUENCER`** (интерпретатор I/O-команд + mid-init ресет GSP-ядра, CORE_RESUME
+   = рестарт SEC2 Booter) → **`GSP_INIT_DONE` (0x1001) получен по RPC**.
+   Доказательство: `docs/hw-dumps/20260630-rtx4070s-gsp-INIT_DONE-OK.log`.
+   Новый код: `driver/gsp/gsp_rpc.{c,h}` (`nv_gsp_build_sysinfo/registry`, `nv_gsp_cmdq_write`),
+   `exec_cpu_sequencer`/`seq_core_resume` в оркестраторе.
+   **Полная тех-запись со всеми деталями и граблями: `docs/gsp-bringup-layer2.md`.**
 
 ---
 
