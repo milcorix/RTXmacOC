@@ -283,7 +283,7 @@ static int run(const nv_mmio_t *io, struct arena *ar)
 
     /* --- задача 7: ждём ответа GSP-RM в status-очереди (событие GSP_INIT_DONE) --- */
     uint32_t wptr=0; int got=0;
-    for (int i=0;i<2000 && active;i++){ wptr=nv_gsp_msgq_writeptr(shm_va,&shm_lay); if(wptr){got=1;break;} bar_udelay(NULL,5000); }
+    for (int i=0;i<6000 && active;i++){ wptr=nv_gsp_msgq_writeptr(shm_va,&shm_lay); if(wptr){got=1;break;} bar_udelay(NULL,5000); }
     uint32_t sig=0,fn=0,len=0;
     if (got){
         const uint8_t *e=shm_va+shm_lay.msgq_off+NV_GSP_QUEUE_ENTRYOFF; /* запись [0] */
@@ -304,15 +304,18 @@ static int run(const nv_mmio_t *io, struct arena *ar)
         printf("ДИАГ: cmdq.rx.readPtr=%u msgq.tx.writePtr=%u GSPmbox0=0x%08x mbox1=0x%08x\n",
                cmd_rx, msg_wp, gmb0, gmb1);
         const char *names[3] = {"LOGINIT","LOGINTR","LOGRM"};
+        const char *files[3] = {"/tmp/gsp-loginit.bin","/tmp/gsp-logintr.bin","/tmp/gsp-logrm.bin"};
         uint8_t *logs[3] = {loginit_va, logintr_va, logrm_va};
         for (int k = 0; k < 3; k++) {
             uint64_t put = *(volatile uint64_t*)logs[k]; /* put-указатель @0 */
-            int nz = 0; for (int j = 0x1000; j < 0x1400; j++) if (logs[k][j]) { nz = 1; break; }
-            printf("ДИАГ: %-8s put=0x%llx данные@0x1000:%s первые: %02x %02x %02x %02x %02x %02x %02x %02x\n",
-                   names[k], (unsigned long long)put, nz?"ЕСТЬ":"нет",
-                   logs[k][0x1000],logs[k][0x1001],logs[k][0x1002],logs[k][0x1003],
-                   logs[k][0x1004],logs[k][0x1005],logs[k][0x1006],logs[k][0x1007]);
+            printf("ДИАГ: %-8s put=0x%llx\n", names[k], (unsigned long long)put);
+            FILE *df = fopen(files[k], "wb");
+            if (df) { fwrite(logs[k], 1, NV_GSP_LIBOS_LOG_SIZE, df); fclose(df); }
         }
+        /* Дамп msgq-региона целиком (вдруг GSP что-то записал не туда). */
+        FILE *mf = fopen("/tmp/gsp-shm.bin","wb");
+        if (mf){ fwrite(shm_va,1,shm_lay.total_size,mf); fclose(mf); }
+        printf("ДИАГ: дампы логов и shm → /tmp/gsp-*.bin\n");
     }
 
     int rpc_ok = (got && sig==NV_GSP_RPC_SIGNATURE);
