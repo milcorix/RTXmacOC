@@ -10,6 +10,8 @@ tools/fwsec_run_linux
 tools/vbios_dump
 tools/booter_parse_test
 tools/gsp_stage_test
+tools/gsp_rpc_test
+tools/gsp_stage_test
 
 # рантайм-артефакты HW-прогона (локальные, не в репо)
 tools/fwsec-frts.log
