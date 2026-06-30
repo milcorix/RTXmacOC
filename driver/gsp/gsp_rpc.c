@@ -54,3 +54,23 @@ int nv_gsp_shm_init(uint8_t *buf, size_t buflen, uint64_t dma_base, nv_gsp_shm_l
     init_queue_hdr(buf + out->msgq_off, out->msg_count);
     return NV_GSP_RPC_OK;
 }
+
+int nv_gsp_rmargs_build(uint8_t *buf, size_t buflen, uint64_t shm_dma,
+                        const nv_gsp_shm_layout_t *lay)
+{
+    if (!buf || !lay) return NV_GSP_RPC_ERR_ARG;
+    if (buflen < NV_GSP_RMARGS_SIZE) return NV_GSP_RPC_ERR_BOUNDS;
+    for (unsigned i = 0; i < NV_GSP_RMARGS_SIZE; i++) buf[i] = 0;
+    st64(buf + NV_RMARGS_SHARED_MEM_PHYS_OFF, shm_dma);            /* sharedMemPhysAddr */
+    st32(buf + NV_RMARGS_PTE_COUNT_OFF,       lay->ptes_nr);       /* pageTableEntryCount */
+    st64(buf + NV_RMARGS_CMDQ_OFF_OFF,        lay->cmdq_off);      /* cmdQueueOffset */
+    st64(buf + NV_RMARGS_STATQ_OFF_OFF,       lay->msgq_off);      /* statQueueOffset */
+    /* lockless-очереди / srInit / gpuInstance / profilerArgs = 0 (cold boot). */
+    return NV_GSP_RPC_OK;
+}
+
+uint32_t nv_gsp_msgq_writeptr(const uint8_t *shm, const nv_gsp_shm_layout_t *lay)
+{
+    const uint8_t *q = shm + lay->msgq_off + NV_MSGQ_TX_WRITEPTR_OFF;
+    return (uint32_t)q[0] | ((uint32_t)q[1] << 8) | ((uint32_t)q[2] << 16) | ((uint32_t)q[3] << 24);
+}

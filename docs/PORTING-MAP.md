@@ -272,3 +272,19 @@ dummy в фазе 3); GSP RISC-V `active=1`. Метрика задачи 6 (Boot
 Остаётся (задача 7 ч.2, HW): `GSP_ARGUMENTS_CACHED` (rmargs: messageQueueInitArguments —
 sharedMemPhysAddr/pageTableEntryCount/cmd+statQueueOffset) + интеграция в оркестратор +
 поллинг msgq на событие `GSP_INIT_DONE`. Вероятны HW-итерации (молчаливые сбои GSP).
+
+## rmargs + RPC handshake (задача 7, часть 2) — 🔶 ЧАСТИЧНО (HW 2026-06-30)
+
+`gsp_rpc.{h,c}` (`nv_gsp_rmargs_build`, `nv_gsp_msgq_writeptr`) + интеграция в
+`tools/gsp_boot_linux.c` (shared-регион очередей + rmargs в RMARGS-регионе libos +
+поллинг msgq). Доказательство-диагностика: `docs/hw-dumps/20260630-rtx4070s-gsp-rpc-partial.log`.
+
+| Наш код | Upstream | Что | Статус |
+|---|---|---|---|
+| `MESSAGE_QUEUE_INIT_ARGUMENTS` | OGK `gsp_init_args.h` | sharedMemPhysAddr@0(u64), pageTableEntryCount@8(u32), cmdQueueOffset@16(u64), statQueueOffset@24(u64), lockless@32/40 | ✅ офсеты |
+| `GSP_ARGUMENTS_CACHED` (rmargs) | OGK `gsp_init_args.h` + nouveau `r535_gsp_rmargs_init` | mq@0(48)+srInit@48(12)+gpuInstance@60+profilerArgs@64; всего 80б | 🔶 заполнен, GSP не дошёл до INIT_DONE |
+
+**HW-результат (частичный):** задача 6 держится (Booter mbox0=0, RISC-V active). GSP-RM
+**исполняет init и пишет логи** (LOGINIT put=0x3e32 ~16КБ — значит libos-args+rmargs читаются
+GSP), но `msgq.writePtr=0` (нет GSP_INIT_DONE), LOGRM едва тронут (put=0x185) → GSP-RM падает
+рано в RM-init. Нужен декодер libos-логов или побайтовая сверка rmargs/msgq для диагноза.

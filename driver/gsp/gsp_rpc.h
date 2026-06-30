@@ -62,4 +62,25 @@ int nv_gsp_shm_compute(nv_gsp_shm_layout_t *out);
  */
 int nv_gsp_shm_init(uint8_t *buf, size_t buflen, uint64_t dma_base, nv_gsp_shm_layout_t *out);
 
+/* --- rmargs (GSP_ARGUMENTS_CACHED, 80б) --- */
+/* OGK gsp_init_args.h: MESSAGE_QUEUE_INIT_ARGUMENTS(@0)+GSP_SR_INIT_ARGUMENTS(@48)+
+   gpuInstance(@60)+profilerArgs(@64). Поля u64 (RmPhysAddr/NvLength), NvBool=u8. */
+#define NV_GSP_RMARGS_SIZE                 80u
+#define NV_RMARGS_SHARED_MEM_PHYS_OFF      0u    /* sharedMemPhysAddr (u64) */
+#define NV_RMARGS_PTE_COUNT_OFF            8u    /* pageTableEntryCount (u32) */
+#define NV_RMARGS_CMDQ_OFF_OFF             16u   /* cmdQueueOffset (u64) */
+#define NV_RMARGS_STATQ_OFF_OFF            24u   /* statQueueOffset (u64) */
+
+/*
+ * Заполнить GSP_ARGUMENTS_CACHED (rmargs) в buf (>=80, обнуляется): messageQueueInitArguments
+ * из раскладки очередей (shm_dma — IOVA shared-региона). Прочее (srInit/gpuInstance/profiler)
+ * = 0 (cold boot). Порт nouveau r535_gsp_rmargs_init.
+ */
+int nv_gsp_rmargs_build(uint8_t *buf, size_t buflen, uint64_t shm_dma,
+                        const nv_gsp_shm_layout_t *lay);
+
+/* Текущий write-указатель msgq (GSP→CPU) = msgqTxHeader.writePtr статус-очереди.
+   shm — указатель на начало shared-региона; lay — его раскладка. */
+uint32_t nv_gsp_msgq_writeptr(const uint8_t *shm, const nv_gsp_shm_layout_t *lay);
+
 #endif /* RTXMACOC_GSP_RPC_H */

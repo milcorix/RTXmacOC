@@ -32,6 +32,7 @@
 #include "../driver/gsp/fb_layout.h"
 #include "../driver/gsp/booter.h"
 #include "../driver/gsp/gsp_fw.h"
+#include "../driver/gsp/gsp_rpc.h"
 #include "../driver/gsp/fw_blob.h"
 
 #define TIMEOUT_US (2u * 1000u * 1000u)
@@ -160,9 +161,10 @@ static int run(const nv_mmio_t *io, struct arena *ar)
 
     /* --- арена: выделить регионы --- */
     uint8_t *fwsec_va,*booter_va,*fwimg_va,*lvl2_va,*lvl1_va,*lvl0_va,*bl_va,*sig_va,*meta_va,*libos_va,
-            *loginit_va,*logintr_va,*logrm_va,*rmargs_va;
+            *loginit_va,*logintr_va,*logrm_va,*rmargs_va,*shm_va;
     uint64_t fwsec_io,booter_io,fwimg_io,lvl2_io,lvl1_io,lvl0_io,bl_io,sig_io,meta_io,libos_io,
-             loginit_io,logintr_io,logrm_io,rmargs_io;
+             loginit_io,logintr_io,logrm_io,rmargs_io,shm_io;
+    nv_gsp_shm_layout_t shm_lay; nv_gsp_shm_compute(&shm_lay);
 
     /* GSP-RM ELF + bootloader (для размеров). */
     uint8_t *gsp=NULL; size_t gsp_len=0;
@@ -190,6 +192,7 @@ static int run(const nv_mmio_t *io, struct arena *ar)
     if (arena_alloc(ar,NV_GSP_LIBOS_LOG_SIZE,&logintr_va,&logintr_io)==(uint64_t)-1) goto oom;
     if (arena_alloc(ar,NV_GSP_LIBOS_LOG_SIZE,&logrm_va,&logrm_io)==(uint64_t)-1) goto oom;
     if (arena_alloc(ar,0x1000,&rmargs_va,&rmargs_io)==(uint64_t)-1) goto oom;
+    if (arena_alloc(ar,shm_lay.total_size,&shm_va,&shm_io)==(uint64_t)-1) goto oom;
 
     /* --- 1. FWSEC-FRTS → WPR2 --- */
     if (do_fwsec_frts(io,frts_addr,frts_size,fwsec_io,fwsec_va,0x100000,boot0)!=0){
@@ -227,6 +230,14 @@ static int run(const nv_mmio_t *io, struct arena *ar)
     nv_gsp_pte_array_fill(loginit_va,NV_GSP_LIBOS_LOG_SIZE,8,loginit_io,NV_GSP_LIBOS_LOG_SIZE);
     nv_gsp_pte_array_fill(logintr_va,NV_GSP_LIBOS_LOG_SIZE,8,logintr_io,NV_GSP_LIBOS_LOG_SIZE);
     nv_gsp_pte_array_fill(logrm_va,NV_GSP_LIBOS_LOG_SIZE,8,logrm_io,NV_GSP_LIBOS_LOG_SIZE);
+
+    /* Очереди RPC (shared mem) + rmargs (GSP_ARGUMENTS_CACHED → RMARGS-регион). */
+    if (nv_gsp_shm_init(shm_va,shm_lay.total_size,shm_io,&shm_lay)!=NV_GSP_RPC_OK){fprintf(stderr,"FAIL: shm_init\n");return -1;}
+    if (nv_gsp_rmargs_build(rmargs_va,0x1000,shm_io,&shm_lay)!=NV_GSP_RPC_OK){fprintf(stderr,"FAIL: rmargs\n");return -1;}
+    printf("RPC shm@0x%llx (cmdq@0x%llx msgq@0x%llx ptes=%u msgCount=%u); rmargs@0x%llx\n",
+           (unsigned long long)shm_io,(unsigned long long)(shm_io+shm_lay.cmdq_off),
+           (unsigned long long)(shm_io+shm_lay.msgq_off),shm_lay.ptes_nr,shm_lay.msg_count,
+           (unsigned long long)rmargs_io);
     printf("staging: fwimage@0x%llx radix3-lvl0@0x%llx bl@0x%llx sig@0x%llx meta@0x%llx libos@0x%llx\n",
            (unsigned long long)fwimg_io,(unsigned long long)lvl0_io,(unsigned long long)bl_io,
            (unsigned long long)sig_io,(unsigned long long)meta_io,(unsigned long long)libos_io);
@@ -270,11 +281,50 @@ static int run(const nv_mmio_t *io, struct arena *ar)
     uint32_t rv=bar_rd(io->ctx,NV_PGSP_FALCON2_BASE+NV_PRISCV_RISCV_CPUCTL_OFF);
     printf("GSP RISC-V: active=%d (CPUCTL=0x%08x)\n",active,rv);
 
-    if (brc==NV_OK && mb0==0 && active){
-        printf("\n*** GSP-RM ЗАГРУЖЕН: Booter mbox0=0 И GSP RISC-V active — метрика задачи 6 достигнута ***\n");
+    /* --- задача 7: ждём ответа GSP-RM в status-очереди (событие GSP_INIT_DONE) --- */
+    uint32_t wptr=0; int got=0;
+    for (int i=0;i<2000 && active;i++){ wptr=nv_gsp_msgq_writeptr(shm_va,&shm_lay); if(wptr){got=1;break;} bar_udelay(NULL,5000); }
+    uint32_t sig=0,fn=0,len=0;
+    if (got){
+        const uint8_t *e=shm_va+shm_lay.msgq_off+NV_GSP_QUEUE_ENTRYOFF; /* запись [0] */
+        const uint8_t *r=e+NV_GSP_MSG_ELEM_HDR_SIZE;
+        sig=r[4]|(r[5]<<8)|(r[6]<<16)|((uint32_t)r[7]<<24);
+        len=r[8]|(r[9]<<8)|(r[10]<<16)|((uint32_t)r[11]<<24);
+        fn =r[12]|(r[13]<<8)|(r[14]<<16)|((uint32_t)r[15]<<24);
+        printf("GSP RPC: msgq.writePtr=%u rpc.signature=0x%08x len=%u function=0x%08x\n",wptr,sig,len,fn);
+    } else printf("GSP RPC: msgq.writePtr=0 — GSP не записал сообщение за ~10с\n");
+
+    /* --- диагностика: тронул ли GSP очереди/логи --- */
+    {
+        const uint8_t *cq = shm_va + shm_lay.cmdq_off, *mq = shm_va + shm_lay.msgq_off;
+        uint32_t cmd_rx = *(volatile uint32_t*)(cq + NV_GSP_MSGQ_RXHDROFF); /* GSP читает cmdq? */
+        uint32_t msg_wp = *(volatile uint32_t*)(mq + NV_MSGQ_TX_WRITEPTR_OFF);
+        uint32_t gmb0 = nv_falcon_read_mailbox0(io, NV_PGSP_FALCON_BASE);
+        uint32_t gmb1 = nv_falcon_read_mailbox1(io, NV_PGSP_FALCON_BASE);
+        printf("ДИАГ: cmdq.rx.readPtr=%u msgq.tx.writePtr=%u GSPmbox0=0x%08x mbox1=0x%08x\n",
+               cmd_rx, msg_wp, gmb0, gmb1);
+        const char *names[3] = {"LOGINIT","LOGINTR","LOGRM"};
+        uint8_t *logs[3] = {loginit_va, logintr_va, logrm_va};
+        for (int k = 0; k < 3; k++) {
+            uint64_t put = *(volatile uint64_t*)logs[k]; /* put-указатель @0 */
+            int nz = 0; for (int j = 0x1000; j < 0x1400; j++) if (logs[k][j]) { nz = 1; break; }
+            printf("ДИАГ: %-8s put=0x%llx данные@0x1000:%s первые: %02x %02x %02x %02x %02x %02x %02x %02x\n",
+                   names[k], (unsigned long long)put, nz?"ЕСТЬ":"нет",
+                   logs[k][0x1000],logs[k][0x1001],logs[k][0x1002],logs[k][0x1003],
+                   logs[k][0x1004],logs[k][0x1005],logs[k][0x1006],logs[k][0x1007]);
+        }
+    }
+
+    int rpc_ok = (got && sig==NV_GSP_RPC_SIGNATURE);
+    if (brc==NV_OK && mb0==0 && active && rpc_ok){
+        printf("\n*** GSP-RM ОТВЕТИЛ ПО RPC (function=0x%08x) — СЛОЙ 2 ЗАВЕРШЁН ***\n",fn);
         return 0;
     }
-    fprintf(stderr,"\nНЕ достигнуто: mbox0=0x%08x active=%d (нужно mbox0=0 И active=1)\n",mb0,active);
+    if (brc==NV_OK && mb0==0 && active){
+        printf("\n*** GSP-RM ЗАГРУЖЕН (задача 6: mbox0=0, RISC-V active), но RPC-ответа нет (задача 7) ***\n");
+        return 1; /* частичный успех */
+    }
+    fprintf(stderr,"\nНЕ достигнуто: mbox0=0x%08x active=%d\n",mb0,active);
     return -1;
 oom:
     nv_fw_blob_free(gsp); nv_fw_blob_free(blb); return -1;
