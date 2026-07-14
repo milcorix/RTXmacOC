@@ -45,7 +45,8 @@ Big Sur+ нет (library validation + приватные интерфейсы + 
 | 2 | GSP bring-up (FWSEC-FRTS→WPR2→GSP-RM→`GSP_INIT_DONE`) | 🟢 HW 2026-06-30 (Linux/VFIO) для `driver/gsp/*`; macOS-kext-шим `FwsecRun.cpp` — 🟡 CI | `tools/{vbios_dump,fwsec_run_linux,gsp_boot_linux}.c`, `falcon_regs.h`, `driver/gsp/*` |
 | 3 | Память (GMMU/VRAM) | 🟢 HW **A** (RPC + RM client/device/subdevice) + **B** (RM_CONTROL/FB_GET_INFO_V2 + FERMI_VASPACE_A/GMMU) + **C** (VRAM memlist NV01_MEMORY_LIST_FBMEM) + **D** (прямой GMMU: page-tables во VRAM + COPY_SERVER_RESERVED_PDES, 2026-07-14), 2026-06-30..07-14 | `driver/gsp/{gsp_rm,gmmu}.*`, `tools/{gsp_boot_linux,gsp_rm_test,gmmu_test}.c` |
 | 4 | Каналы (command submission: FIFO/GR) | 🟢 **ЗАМКНУТ НА ЖЕЛЕЗЕ 2026-07-14**: A (канал `AMPERE_CHANNEL_GPFIFO_A`+BIND+SCHEDULE) + B (объект CE `AMPERE_DMA_COPY_B`) + C (**pushbuffer исполнен, host-семафор `0xcafe0001`** — первая команда GPU), всё `NV_OK` | `driver/gsp/gsp_fifo.*`, `tools/gsp_fifo_test.c` |
-| 5–6 | дисплей/Metal | ⏳ (дисплей — заблокирован Apple, см. graphics-stack) | — |
+| 5 | Дисплей (modeset через GSP) | 🟢 **5A НА ЖЕЛЕЗЕ 2026-07-14**: `NV04_DISPLAY_COMMON` + `GET_NUM_HEADS` (heads=4) + `GET_SUPPORTED` (displayMask=0x7f00, 7 выходов). Аппаратный трек (Linux/VFIO). Дальше 5B (коннекторы+EDID) / 5C (modeset+scanout). macOS-интеграция — отдельный трек, замок Apple | `driver/gsp/gsp_disp.*`, `tools/gsp_disp_test.c` |
+| 6 | Metal/accel | ⏳ замок Apple (см. graphics-stack) | — |
 
 ---
 

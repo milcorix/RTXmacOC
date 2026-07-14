@@ -181,7 +181,15 @@ docs/                   архитектура, роадмап, конспект
   VFN `0xbb0090`) → GPU записал host-семафор `0xcafe0001`, read-back MATCH — **ПЕРВАЯ
   КОМАНДА GPU ИСПОЛНЕНА**. Путь submission замкнут. Пруфы:
   `docs/hw-dumps/20260714-rtx4070s-layer4-pass{A-chan,B-ceobj,C-exec}-OK.log`.
-  Дальше: слой 5 (дисплей/modeset) — упирается в замок Apple.
+- Слой 5 (дисплей): 🟢 **5A НА ЖЕЛЕЗЕ 2026-07-14**. `driver/gsp/gsp_disp.{c,h}`
+  (`nv_gsp_disp_common_alloc`, `nv_gsp_disp_get_num_heads`, `nv_gsp_disp_get_supported`),
+  класс `NV04_DISPLAY_COMMON (0x0073)`, контролы `NV0073_CTRL_CMD_SYSTEM_GET_NUM_HEADS
+  (0x730102)`/`GET_SUPPORTED (0x730120)`. Порт nouveau `r535_disp_oneinit`. На железе:
+  `heads=4`, `displayMask=0x7f00` (7 выходов, DDC). Пруф:
+  `docs/hw-dumps/20260714-rtx4070s-layer5-A0-disp-OK.log`. Тех-запись:
+  **`docs/gsp-layer5-display.md`**. Это **аппаратный modeset-трек** (Linux/VFIO), от
+  macOS не зависит. Дальше: 5B (коннекторы+EDID), 5C (modeset+scanout). Интеграция в
+  macOS WindowServer — ОТДЕЛЬНЫЙ трек, замок Apple (открытый вопрос №1, гейт R10).
 
 ## Ключевые источники (референс-база)
 

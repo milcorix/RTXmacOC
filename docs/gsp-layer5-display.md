@@ -1,8 +1,10 @@
 # Слой 5 — дисплей / modeset через GSP-RM
 
-**Статус:** 🔧 разведка + framing (2026-07-15). Эталон — nouveau
+**Статус:** 🟢 **5A НА ЖЕЛЕЗЕ 2026-07-14** (RTX 4070S, Linux/VFIO): `NV04_DISPLAY_COMMON`
+создан, `heads=4`, `displayMask=0x7f00` (7 выходов, DDC=0x7f00). Эталон — nouveau
 `nvkm/engine/disp/r535.c` (`r535_disp_oneinit`/`_init`), контролы `ctrl0073*.h`,
-классы `nvif/class.h` / `g_allclasses.h`. Тех-запись сюда.
+классы `nvif/class.h` / `g_allclasses.h`.
+**Доказательство:** `docs/hw-dumps/20260714-rtx4070s-layer5-A0-disp-OK.log`.
 
 **Важно про два трека слоя 5:**
 1. **Аппаратный modeset через GSP-RM** (этот документ) — гоним на Linux/VFIO, как
@@ -77,8 +79,10 @@ subdevice GSP — в nouveau делается до объектов. Для 5A (
 - Оркестратор `tools/gsp_boot_linux.c` (блок «СЛОЙ 5 A0»): alloc disp-common +
   печать numHeads + displayMask/DDC.
 
-**Дальше (HW):** 5A на железе (heads/displayMask прочитаны) → 5B (коннекторы+EDID,
-с монитором) → 5C (modeset+scanout = картинка).
+**5A 🟢 HW 2026-07-14:** `NV04_DISPLAY_COMMON` alloc `status=NV_OK`; `GET_NUM_HEADS`
+→ `heads=4`; `GET_SUPPORTED` → `displayMask=0x7f00` (7 выходов, биты 8–14), `DDC=0x7f00`.
+prereq inst-mem НЕ потребовался. Пруф: `docs/hw-dumps/20260714-rtx4070s-layer5-A0-disp-OK.log`.
+**Дальше:** 5B (per-display OR_GET_INFO + CONNECT_STATE + EDID) → 5C (modeset+scanout).
 
 ---
 

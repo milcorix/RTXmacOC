@@ -103,6 +103,22 @@ doorbell (`AMPERE_USERMODE_A 0xC561`) → host-семафор `0xcafe0001`, read
 Первая команда GPU исполнена; слой 4 замкнут. Пруф:
 `docs/hw-dumps/20260714-rtx4070s-layer4-passC-exec-OK.log`.
 
+## Слой 5 — дисплей (энумерация) — 🟢 5A НА ЖЕЛЕЗЕ 2026-07-14
+
+`driver/gsp/gsp_disp.{c,h}` (порт nouveau `disp/r535.c`), офлайн-тест
+`tools/gsp_disp_test.c`. Тех-запись: `docs/gsp-layer5-display.md`. Пруф:
+`docs/hw-dumps/20260714-rtx4070s-layer5-A0-disp-OK.log`.
+
+| Наш код | Upstream | Что взято | Статус |
+|---|---|---|---|
+| `nv_gsp_disp_common_alloc` | `r535_disp_oneinit` + `nvif/class.h` | `NV04_DISPLAY_COMMON`=0x0073, hObject=0x00730000, paramsSize=0 | 🟢 HW (status=NV_OK) |
+| `nv_gsp_disp_get_num_heads` | `ctrl0073system.h` `GET_NUM_HEADS` | cmd=0x730102, `{subDeviceInstance,flags,numHeads}` (12б, OUT@8) | 🟢 HW (heads=4) |
+| `nv_gsp_disp_get_supported` | `ctrl0073system.h` `GET_SUPPORTED` | cmd=0x730120, `{subDeviceInstance,displayMask,displayMaskDDC}` (12б, OUT@4/@8) | 🟢 HW (0x7f00) |
+
+Дальше: 5B (`SPECIFIC_OR_GET_INFO`, `SYSTEM_GET_CONNECT_STATE`, `SPECIFIC_GET_EDID_V2`,
+`DP_GET_CAPS`), 5C (display root `AD102_DISP 0xC770` + inst-mem + core/wndw каналы +
+framebuffer + modeset/scanout). Display root класс — `g_allclasses.h`/`nvif/class.h`.
+
 ## Конкретные upstream-ссылки (raw, ветка master ядра)
 
 - nova vbios:   `drivers/gpu/nova-core/vbios.rs`
