@@ -57,8 +57,11 @@ RAMIN + display root `AD102_DISP` (0xc7700000). 5C.2: display-pushbuffer + core 
   `NV50VAIO_CHANNELDMA_ALLOCATION_PARAMETERS` 32б: channelInstance=0, offset=0).
   hObject=(class<<16)|inst=0xc77d0000. Window `GA102_DISP_WINDOW_CHANNEL_DMA (0xC67E)`,
   cursor `GA102_DISP_CURSOR (0xC67A)` — для surface scanout (5C.4).
-- **5C.3**: SOR acquire (`NV0073_CTRL_CMD_DFP_ASSIGN_SOR`) + для DP link training
-  (`NV0073_CTRL_CMD_DP_CTRL`), для HDMI `SPECIFIC_SET_HDMI_ENABLE`.
+- **5C.3** (🔧 framing): SOR acquire `NV0073_CTRL_CMD_DFP_ASSIGN_SOR (0x731152)` для
+  подключённого displayId — до modeset и до DP link training. params 80б (displayId@4,
+  sorExcludeMask@8, sorAssignListWithTag[4]@40 {displayMask,sorType}, flags@76); индекс
+  SOR = запись, чей displayMask содержит наш displayId (порт r535_outp_acquire). Затем
+  для DP — link training `NV0073_CTRL_CMD_DP_CTRL`, для HDMI/TMDS — modeset напрямую.
 - **5C.4**: framebuffer-surface во VRAM (наш GMMU) + методы core/window channel
   (SetRasterSize/SetContextDmaIso/SetSurfaceAddress/Update) → выставить mode из EDID,
   включить scanout = картинка.

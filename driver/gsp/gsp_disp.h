@@ -63,6 +63,20 @@
 #define NV50VAIO_CHANDMA_CHANINST_OFF  0u
 #define NV50VAIO_CHANDMA_OFFSET_OFF   12u
 
+/* --- 5C.3: SOR acquire (ctrl0073dfp.h) --- */
+#define NV0073_CTRL_CMD_DFP_ASSIGN_SOR   0x731152u
+#define NV0073_ASSIGN_SOR_MAX_SORS       4u
+/* NV0073_CTRL_DFP_ASSIGN_SOR_PARAMS (80б): subDeviceInstance@0 displayId@4
+   sorExcludeMask@8(u8) slaveDisplayId@12 forceSublinkConfig@16 bIs2Head1Or@20(u8)
+   sorAssignList[4]@24 sorAssignListWithTag[4]@40 ({displayMask,sorType} по 8б)
+   reservedSorMask@72(u8) flags@76. */
+#define NV0073_ASSIGN_SOR_PARAMS_SIZE      80u
+#define NV0073_ASSIGN_SOR_DISPLAYID_OFF     4u
+#define NV0073_ASSIGN_SOR_EXCLUDEMASK_OFF   8u
+#define NV0073_ASSIGN_SOR_LISTWITHTAG_OFF  40u
+#define NV0073_ASSIGN_SOR_INFO_STRIDE       8u   /* {displayMask@0, sorType@4} */
+#define NV0073_ASSIGN_SOR_FLAGS_OFF        76u
+
 /* --- Контролы NV0073 SYSTEM (ctrl0073system.h) --- */
 #define NV0073_CTRL_CMD_SYSTEM_GET_NUM_HEADS  0x730102u
 #define NV0073_CTRL_CMD_SYSTEM_GET_SUPPORTED  0x730120u
@@ -181,5 +195,14 @@ int nv_gsp_disp_channel_pushbuffer(nv_gsp_rpc_chan *ch, uint32_t hIntClient,
 int nv_gsp_disp_core_channel_alloc(nv_gsp_rpc_chan *ch, uint32_t hClient, uint32_t hDispRoot,
                                    uint32_t coreClass, uint32_t channelInstance,
                                    uint32_t *out_chan, uint32_t *status);
+
+/*
+ * 5C.3: назначить SOR подключённому displayId (DFP_ASSIGN_SOR). Нужно до modeset и
+ * до DP link training. Читает sorAssignListWithTag[] и находит индекс SOR, чей
+ * displayMask содержит наш displayId. *out_sor ← индекс SOR (0..3) или ~0. Порт
+ * r535_outp_acquire.
+ */
+int nv_gsp_disp_assign_sor(nv_gsp_rpc_chan *ch, uint32_t hClient, uint32_t hDispCommon,
+                           uint32_t displayId, uint32_t *out_sor, uint32_t *status);
 
 #endif /* RTXMACOC_GSP_DISP_H */

@@ -859,6 +859,21 @@ static int run(const nv_mmio_t *io, struct arena *ar, const char *bdf)
                         printf("СЛОЙ 5 C.2: CORE_CHANNEL_DMA rc=%d status=0x%x handle=0x%08x%s\n",
                                crc, cst, hcore,
                                (crc==NV_GSP_RM_OK && cst==0) ? "  ★ CORE CHANNEL ★" : "  (не OK)");
+
+                        /* --- СЛОЙ 5 C.3: назначить SOR подключённым дисплеям ---
+                           DFP_ASSIGN_SOR до modeset (и до DP link training). Порт
+                           r535_outp_acquire. Перебираем подключённые (connected). */
+                        if (crc == NV_GSP_RM_OK && cst == 0) {
+                            for (uint32_t b = 0; b < 32; b++) {
+                                uint32_t did = conn & (1u << b);
+                                if (!did) continue;
+                                uint32_t sor = ~0u, ast = 0xffffffffu;
+                                int arc = nv_gsp_disp_assign_sor(&ch, hcli, hdisp, did, &sor, &ast);
+                                printf("СЛОЙ 5 C.3: ASSIGN_SOR disp=0x%04x rc=%d status=0x%x SOR=%d%s\n",
+                                       did, arc, ast, (int)sor,
+                                       (arc==NV_GSP_RM_OK && ast==0 && sor!=~0u) ? "  ★ SOR ★" : "  (не OK)");
+                            }
+                        }
                     }
                 }
             }

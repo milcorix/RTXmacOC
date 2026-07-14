@@ -183,3 +183,28 @@ int nv_gsp_disp_core_channel_alloc(nv_gsp_rpc_chan *ch, uint32_t hClient, uint32
     if (rc == NV_GSP_RM_OK && out_chan) *out_chan = h;
     return rc;
 }
+
+int nv_gsp_disp_assign_sor(nv_gsp_rpc_chan *ch, uint32_t hClient, uint32_t hDispCommon,
+                           uint32_t displayId, uint32_t *out_sor, uint32_t *status)
+{
+    if (!ch) return NV_GSP_RM_ERR_ARG;
+    uint8_t p[NV0073_ASSIGN_SOR_PARAMS_SIZE];
+    for (unsigned i = 0; i < sizeof(p); i++) p[i] = 0;
+    st32(p + NV0073_ASSIGN_SOR_DISPLAYID_OFF, displayId);   /* назначить SOR этому displayId */
+    /* sorExcludeMask=0 (любой SOR), flags=0 (AUDIO_DEFAULT). */
+
+    uint32_t st = 0xffffffffu;
+    int rc = nv_gsp_rm_control(ch, hClient, hDispCommon, NV0073_CTRL_CMD_DFP_ASSIGN_SOR,
+                               p, sizeof(p), &st);
+    if (status) *status = st;
+    if (rc != NV_GSP_RM_OK) return rc;
+    /* Найти SOR, чей displayMask содержит наш displayId (как r535_outp_acquire). */
+    uint32_t sor = ~0u;
+    for (uint32_t i = 0; i < NV0073_ASSIGN_SOR_MAX_SORS; i++) {
+        uint32_t dm = ld32(p + NV0073_ASSIGN_SOR_LISTWITHTAG_OFF
+                             + i * NV0073_ASSIGN_SOR_INFO_STRIDE);   /* displayMask@0 записи */
+        if (dm & displayId) { sor = i; break; }
+    }
+    if (out_sor) *out_sor = sor;
+    return NV_GSP_RM_OK;
+}

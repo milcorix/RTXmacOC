@@ -265,6 +265,30 @@ static void test_core_channel_alloc(void)
     CHECK(ld32(al + NV_RM_ALLOC_PARAMSIZE_OFF) == NV50VAIO_CHANDMA_PARAMS_SIZE, "paramsSize == 32");
 }
 
+static void test_assign_sor(void)
+{
+    printf("[test_assign_sor]\n");
+    nv_gsp_rpc_chan ch; chan_init(&ch);
+    uint8_t rep[NV_RM_CTRL_HDR_SIZE + NV0073_ASSIGN_SOR_PARAMS_SIZE]; memset(rep, 0, sizeof(rep));
+    uint8_t *pp = rep + NV_RM_CTRL_HDR_SIZE;
+    /* sorAssignListWithTag: [0]={0x200,SINGLE} [1]={0,NONE} [2]={0x100,SINGLE} [3]={0,NONE}
+       → для displayId 0x100 ожидаем SOR 2. */
+    st32(pp + NV0073_ASSIGN_SOR_LISTWITHTAG_OFF + 0*NV0073_ASSIGN_SOR_INFO_STRIDE, 0x200);
+    st32(pp + NV0073_ASSIGN_SOR_LISTWITHTAG_OFF + 2*NV0073_ASSIGN_SOR_INFO_STRIDE, 0x100);
+    put_msg(g_shm, &ch.lay, 0, NV_VGPU_MSG_FUNCTION_GSP_RM_CONTROL, 0, rep, sizeof(rep), 1);
+    set_msgq_wptr(g_shm, &ch.lay, 1);
+
+    uint32_t sor = 0xffffffffu, st = 0xffffffffu;
+    int rc = nv_gsp_disp_assign_sor(&ch, NV_GSP_RM_CLIENT_HANDLE, NV_GSP_RM_DISPCOMMON_HANDLE,
+                                    0x100, &sor, &st);
+    CHECK(rc == NV_GSP_RM_OK && st == 0, "assign_sor OK");
+    CHECK(sor == 2, "SOR для 0x100 == 2 (из sorAssignListWithTag)");
+    const uint8_t *cp = g_shm + ch.lay.cmdq_off + NV_GSP_QUEUE_ENTRYOFF + 0 + NV_GSP_RPC_PAYLOAD_OFF;
+    CHECK(ld32(cp + NV_RM_CTRL_CMD_OFF) == NV0073_CTRL_CMD_DFP_ASSIGN_SOR, "cmd == DFP_ASSIGN_SOR");
+    CHECK(ld32(cp + NV_RM_CTRL_HDR_SIZE + NV0073_ASSIGN_SOR_DISPLAYID_OFF) == 0x100, "displayId == 0x100");
+    CHECK(ld32(cp + NV_RM_CTRL_PARAMSIZE_OFF) == NV0073_ASSIGN_SOR_PARAMS_SIZE, "paramsSize == 80");
+}
+
 int main(void)
 {
     test_disp_common_alloc();
@@ -277,6 +301,7 @@ int main(void)
     test_disp_root_alloc();
     test_channel_pushbuffer();
     test_core_channel_alloc();
+    test_assign_sor();
     printf(failed ? "\n=== gsp_disp_test: ЕСТЬ ПРОВАЛЫ ===\n" : "\n=== gsp_disp_test: ВСЕ ТЕСТЫ ПРОШЛИ ===\n");
     return failed ? 1 : 0;
 }
