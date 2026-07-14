@@ -1,9 +1,10 @@
 # Слой 5 — дисплей / modeset через GSP-RM
 
-**Статус:** 🟢 **5A+5B+5C.1+5C.2 НА ЖЕЛЕЗЕ 2026-07-14** (RTX 4070S, Linux/VFIO). 5C.1:
-RAMIN + display root `AD102_DISP` (0xc7700000). 5C.2: display-pushbuffer + core channel
-`AD102_DISP_CORE_CHANNEL_DMA` (0xc77d0000), всё `NV_OK`. Пруфы:
-`docs/hw-dumps/20260714-rtx4070s-layer5-C{1-disproot,2-corechan}-OK.log`. Ниже: 5A —
+**Статус:** 🟢 **5A+5B+5C.1+5C.2+5C.3 НА ЖЕЛЕЗЕ 2026-07-14** (RTX 4070S, Linux/VFIO).
+5C.1: RAMIN + display root `AD102_DISP` (0xc7700000). 5C.2: display-pushbuffer + core
+channel `AD102_DISP_CORE_CHANNEL_DMA` (0xc77d0000). 5C.3: SOR acquire (HDMI 0x100→SOR0,
+DP 0x200→SOR1). Всё `NV_OK`. Пруфы:
+`docs/hw-dumps/20260714-rtx4070s-layer5-C{1-disproot,2-corechan,3-sor}-OK.log`. Ниже: 5A —
 `NV04_DISPLAY_COMMON`, `heads=4`, `displayMask=0x7f00` (7 выходов); 5B — перечислены
 типы/протоколы всех 7 OR (SOR TMDS/DP), **два монитора обнаружены** (`connected=0x300`),
 **EDID прочитан по DDC** (magic `00ffffffffffff00`, 384 байта). Эталон — nouveau
@@ -57,7 +58,9 @@ RAMIN + display root `AD102_DISP` (0xc7700000). 5C.2: display-pushbuffer + core 
   `NV50VAIO_CHANNELDMA_ALLOCATION_PARAMETERS` 32б: channelInstance=0, offset=0).
   hObject=(class<<16)|inst=0xc77d0000. Window `GA102_DISP_WINDOW_CHANNEL_DMA (0xC67E)`,
   cursor `GA102_DISP_CURSOR (0xC67A)` — для surface scanout (5C.4).
-- **5C.3** (🔧 framing): SOR acquire `NV0073_CTRL_CMD_DFP_ASSIGN_SOR (0x731152)` для
+- **5C.3** (🟢 HW 2026-07-14: ASSIGN_SOR — HDMI 0x100→SOR0, DP 0x200→SOR1, `NV_OK`;
+  пруф `docs/hw-dumps/20260714-rtx4070s-layer5-C3-sor-OK.log`): SOR acquire
+  `NV0073_CTRL_CMD_DFP_ASSIGN_SOR (0x731152)` для
   подключённого displayId — до modeset и до DP link training. params 80б (displayId@4,
   sorExcludeMask@8, sorAssignListWithTag[4]@40 {displayMask,sorType}, flags@76); индекс
   SOR = запись, чей displayMask содержит наш displayId (порт r535_outp_acquire). Затем

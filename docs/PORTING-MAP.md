@@ -103,7 +103,7 @@ doorbell (`AMPERE_USERMODE_A 0xC561`) → host-семафор `0xcafe0001`, read
 Первая команда GPU исполнена; слой 4 замкнут. Пруф:
 `docs/hw-dumps/20260714-rtx4070s-layer4-passC-exec-OK.log`.
 
-## Слой 5 — дисплей (enum + EDID + display root + core channel) — 🟢 5A+5B+5C.1+5C.2 НА ЖЕЛЕЗЕ 2026-07-14
+## Слой 5 — дисплей (enum + EDID + display root + core channel + SOR) — 🟢 5A+5B+5C.1..3 НА ЖЕЛЕЗЕ 2026-07-14
 
 `driver/gsp/gsp_disp.{c,h}` (порт nouveau `disp/r535.c`), офлайн-тест
 `tools/gsp_disp_test.c`. Тех-запись: `docs/gsp-layer5-display.md`. Пруф:
@@ -121,9 +121,10 @@ doorbell (`AMPERE_USERMODE_A 0xC561`) → host-семафор `0xcafe0001`, read
 | `nv_gsp_disp_root_alloc` | `r535_disp_init` + `nvif/class.h` | `AD102_DISP`=0xC770, hObject=class<<16=0xc7700000, paramsSize=0 | 🟢 HW (display root) |
 | `nv_gsp_disp_channel_pushbuffer` | `ctrl2080internal.h` `DISPLAY_CHANNEL_PUSHBUFFER` + `r535_chan_push` | cmd=0x20800a58 (40б): addressSpace@0 physicalAddr@8 limit@16 cacheSnoop@24 hclass@28 channelInstance@32 valid@36; на внутр. subdevice | 🟢 HW (status=NV_OK) |
 | `nv_gsp_disp_core_channel_alloc` | `r535_dmac_init` + `nvos.h`/`nvif/class.h` | `AD102_DISP_CORE_CHANNEL_DMA`=0xC77D, hObject=class<<16=0xc77d0000 под display root, params `NV50VAIO_CHANNELDMA_ALLOCATION_PARAMETERS` (32б: channelInstance@0, offset@12) | 🟢 HW (core channel) |
+| `nv_gsp_disp_assign_sor` | `ctrl0073dfp.h` `DFP_ASSIGN_SOR` + `r535_outp_acquire` | cmd=0x731152 (80б): displayId@4 sorExcludeMask@8 sorAssignListWithTag[4]@40 ({displayMask,sorType} 8б) flags@76; SOR = запись с нашим displayMask | 🟢 HW (HDMI→SOR0, DP→SOR1) |
 
-Дальше: 5C.3 (`DFP_ASSIGN_SOR` + DP `DP_CTRL`/HDMI `SET_HDMI_ENABLE`), 5C.4
-(framebuffer + методы core/window channel = modeset/scanout = картинка).
+Дальше: 5C.4 (framebuffer во VRAM + методы core channel = modeset/scanout = картинка);
+для DP — link training `DP_CTRL`, для HDMI `SPECIFIC_SET_HDMI_ENABLE`.
 
 ## Конкретные upstream-ссылки (raw, ветка master ядра)
 

@@ -197,11 +197,14 @@ docs/                   архитектура, роадмап, конспект
   `nv_gsp_disp_channel_pushbuffer` (`DISPLAY_CHANNEL_PUSHBUFFER 0x20800a58` на внутр.
   subdevice) + `nv_gsp_disp_core_channel_alloc` (`AD102_DISP_CORE_CHANNEL_DMA 0xC77D` →
   handle 0xc77d0000, params `NV50VAIO_CHANNELDMA_ALLOCATION_PARAMETERS` 32б), оба `NV_OK`.
-  Пруф: `docs/hw-dumps/20260714-rtx4070s-layer5-C2-corechan-OK.log`. Тех-запись:
+  Пруф: `docs/hw-dumps/20260714-rtx4070s-layer5-C2-corechan-OK.log`. **5C.3 🟢 HW**:
+  `nv_gsp_disp_assign_sor` (`DFP_ASSIGN_SOR 0x731152`) — SOR привязан подключённым:
+  HDMI 0x100→SOR0, DP 0x200→SOR1, `NV_OK`. Пруф:
+  `docs/hw-dumps/20260714-rtx4070s-layer5-C3-sor-OK.log`. Тех-запись:
   **`docs/gsp-layer5-display.md`**. Это **аппаратный modeset-трек** (Linux/VFIO), от
-  macOS не зависит. Дальше: 5C.3 (SOR acquire + link training), 5C.4 (framebuffer +
-  методы core/window = картинка). Интеграция в macOS WindowServer — ОТДЕЛЬНЫЙ трек,
-  замок Apple (открытый вопрос №1, гейт R10).
+  macOS не зависит. Дальше: 5C.4 (framebuffer во VRAM + методы core channel
+  SetRasterSize/SetContextDmaIso/SetSurface/Update = картинка); для DP — link training
+  `DP_CTRL`. Интеграция в macOS WindowServer — ОТДЕЛЬНЫЙ трек, замок Apple (гейт R10).
 
 ## Ключевые источники (референс-база)
 
