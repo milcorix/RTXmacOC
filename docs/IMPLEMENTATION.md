@@ -44,7 +44,7 @@ Big Sur+ нет (library validation + приватные интерфейсы + 
 | 1 | PCIe bring-up, чтение `PMC_BOOT_0` | 🟡 CI (на железе не запускался) | `pcie_probe.c`, `ada_regs.h`, `driver/RTXProbe/`, `driver/RTXProbeDext/` |
 | 2 | GSP bring-up (FWSEC-FRTS→WPR2→GSP-RM→`GSP_INIT_DONE`) | 🟢 HW 2026-06-30 (Linux/VFIO) для `driver/gsp/*`; macOS-kext-шим `FwsecRun.cpp` — 🟡 CI | `tools/{vbios_dump,fwsec_run_linux,gsp_boot_linux}.c`, `falcon_regs.h`, `driver/gsp/*` |
 | 3 | Память (GMMU/VRAM) | 🟢 HW **A** (RPC + RM client/device/subdevice) + **B** (RM_CONTROL/FB_GET_INFO_V2 + FERMI_VASPACE_A/GMMU) + **C** (VRAM memlist NV01_MEMORY_LIST_FBMEM) + **D** (прямой GMMU: page-tables во VRAM + COPY_SERVER_RESERVED_PDES, 2026-07-14), 2026-06-30..07-14 | `driver/gsp/{gsp_rm,gmmu}.*`, `tools/{gsp_boot_linux,gsp_rm_test,gmmu_test}.c` |
-| 4 | Каналы (command submission: FIFO/GR) | 🔧 framing + офлайн-тест 2026-07-15 (channel alloc/bind/schedule, класс AMPERE_CHANNEL_GPFIFO_A, compile-probe params=360); HW впереди (буферы+VA) | `driver/gsp/gsp_fifo.*`, `tools/gsp_fifo_test.c` |
+| 4 | Каналы (command submission: FIFO/GR) | 🟢 **ПРОХОД A НА ЖЕЛЕЗЕ 2026-07-14**: A0 (таблица движков, CE0 engineType=0x9) + A1 (буферы VRAM) + A2 (channel alloc `AMPERE_CHANNEL_GPFIFO_A` + BIND + SCHEDULE), всё `NV_OK` — канал в runlist. Дальше B (объект CE) / C (pushbuffer+семафор) | `driver/gsp/gsp_fifo.*`, `tools/gsp_fifo_test.c` |
 | 5–6 | дисплей/Metal | ⏳ (дисплей — заблокирован Apple, см. graphics-stack) | — |
 
 ---
@@ -219,12 +219,19 @@ WPR2-границы, GFW boot, `NV_PGSP_QUEUE_HEAD`.
 
 ---
 
-## Слой 4 — каналы (command submission) — 🔧 framing + офлайн 2026-07-15
+## Слой 4 — каналы (command submission) — 🟢 ПРОХОД A НА ЖЕЛЕЗЕ 2026-07-14
 
-Первый шаг слоя 4: поднять канал GPFIFO через GSP-RM (порт nouveau
-`r535_chan_ramfc_write`). Новый модуль `driver/gsp/gsp_fifo.{c,h}` + офлайн-тест
-`tools/gsp_fifo_test.c` (`make gsp-fifo-test`). Тех-запись и план проходов A/B/C —
-`docs/gsp-layer4-fifo.md`.
+Канал GPFIFO поднят через GSP-RM (порт nouveau `r535_chan_ramfc_write`). Модуль
+`driver/gsp/gsp_fifo.{c,h}` + офлайн-тест `tools/gsp_fifo_test.c` (`make gsp-fifo-test`).
+Тех-запись и план проходов A/B/C — `docs/gsp-layer4-fifo.md`. **Доказательство:**
+`docs/hw-dumps/20260714-rtx4070s-layer4-passA-chan-OK.log`.
+
+- **A0**: `FIFO_GET_DEVICE_INFO_TABLE` → 11 движков (GR0, COPY0..4, NVDEC/NVENC/SEC2/OFA/SW),
+  CE0 engineType=0x9 runlist=0.
+- **A1**: instance+RAMFC/USERD/method-buffer во VRAM за page-tables прохода D; кольцо
+  GPFIFO в замапленном GPU-VA (`0x20000000`).
+- **A2**: `channel_alloc` (`AMPERE_CHANNEL_GPFIFO_A`) + `BIND` + `GPFIFO_SCHEDULE` = `NV_OK`.
+  Грабли: SCHEDULE-params ровно 2 байта (иначе `NV_ERR_INVALID_PARAM_STRUCT 0x3a`).
 
 - `nv_gsp_rm_channel_alloc` — `GSP_RM_ALLOC` класс `AMPERE_CHANNEL_GPFIFO_A (0xC56F)`
   под device, params `NV_CHANNEL_ALLOC_PARAMS` (360б, compile-probe): GPU-VA кольца

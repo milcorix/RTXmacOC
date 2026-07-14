@@ -1,9 +1,20 @@
 # Слой 4 — command submission (каналы FIFO/GR) через GSP-RM
 
-**Статус:** 🔧 разведка + framing-код + офлайн-тест (2026-07-15). На железе ещё НЕ
-прогонялось (нужна плумбинг-обвязка буферов во VRAM). Эталон — nouveau
-`nvkm/engine/fifo/r535.c` (`r535_chan_ramfc_write`), классы из `nvif/class.h`,
-структуры из nvrm 535.113.01 (`alloc/alloc_channel.h`, `ctrl/ctrla06f/*`).
+**Статус:** 🟢 **ПРОХОД A НА ЖЕЛЕЗЕ 2026-07-14** (RTX 4070S, Linux/VFIO): A0 (таблица
+движков) + A1 (буферы во VRAM) + A2 (channel alloc + BIND + SCHEDULE) — всё `NV_OK`.
+Канал `AMPERE_CHANNEL_GPFIFO_A` (CE0) создан и запланирован в runlist.
+**Доказательство:** `docs/hw-dumps/20260714-rtx4070s-layer4-passA-chan-OK.log`.
+Эталон — nouveau `nvkm/engine/fifo/r535.c` (`r535_chan_ramfc_write`), классы из
+`nvif/class.h`, структуры из nvrm 535.113.01 (`alloc/alloc_channel.h`, `ctrl/ctrla06f/*`).
+
+**Результат A0 на железе** (11 движков): GR0 (0x01, runlist 0); COPY0..COPY4
+(0x09..0x0d); NVDEC0 (0x1d), NVENC0 (0x26), SEC2 (0x30), OFA (0x3d); SW (0x2c).
+CE0 → engineType=0x9, runlist=0 (использован для канала).
+
+**Грабли A2 (решено):** `GPFIFO_SCHEDULE` сперва вернул `status=0x3a`
+(`NV_ERR_INVALID_PARAM_STRUCT`) — слали `paramsSize=4`, а
+`NVA06F_CTRL_GPFIFO_SCHEDULE_PARAMS` = `{NvBool bEnable; NvBool bSkipSubmit}` = **ровно
+2 байта**. RM сверяет точный размер структуры контрола. Исправлено на 2 → `NV_OK`.
 
 Слой 3 закрыт (A+B+C+D): двусторонний RPC, RM client/device/subdevice, VA-пространство
 (`FERMI_VASPACE_A`), VRAM memlist и прямой GMMU-маппинг (VRAM в GPU VA). Слой 4 —
@@ -120,13 +131,22 @@ device-info — подшаг A0 (следующий за этим framing-сло
 - `tools/gsp_fifo_test.c` (`make gsp-fifo-test`): compile-probe sizeof/offset
   `NV_CHANNEL_ALLOC_PARAMS` (=360) + framing alloc/bind/schedule на синтетическом канале.
 
-**A0 🟢 HW 2026-07-14** — `nv_gsp_fifo_get_device_info` прочитал таблицу движков
-RTX 4070S (11 шт.): GR0(0x01,runl0), SEC2(0x30), NVENC(0x26), NVDEC0(0x1d),
-**COPY0..COPY4(0x09..0x0d)**, OFA/NVJPEG(0x3d), SW(0x2c). CE0 → engineType=0x9,
-runlist=0. Пруф: `docs/hw-dumps/20260714-rtx4070s-layer4-A0-devinfo-OK.log`.
+**Проход A 🟢 HW 2026-07-14** (`docs/hw-dumps/20260714-rtx4070s-layer4-passA-chan-OK.log`):
+- **A0**: `nv_gsp_fifo_get_device_info` прочитал таблицу движков RTX 4070S (11 шт.):
+  GR0(0x01,runl0), SEC2(0x30), NVENC(0x26), NVDEC0(0x1d), **COPY0..COPY4(0x09..0x0d)**,
+  OFA/NVJPEG(0x3d), SW(0x2c). CE0 → engineType=0x9, runlist=0.
+- **A1**: буферы во VRAM за page-tables прохода D (`pt_base+0x10000`): instance+RAMFC,
+  USERD, method-buffer; кольцо GPFIFO — в уже замапленном VA (`va=0x20000000`→`vphys`).
+- **A2**: `channel_alloc` (`AMPERE_CHANNEL_GPFIFO_A`, engineType=0x9) `status=NV_OK`
+  handle=`0xf1f00000` → `BIND` `NV_OK` → `GPFIFO_SCHEDULE(enable)` `NV_OK`. Канал в runlist.
 
-**Дальше (HW):** A1 буферы instance/USERD/GPFIFO во VRAM + GPFIFO в GPU-VA (прямой
-GMMU) → A2 alloc+bind+schedule на железе (engineType=0x9, метрика прохода A).
+**Грабли (решено):** `GPFIFO_SCHEDULE` сперва `status=0x3a` (`NV_ERR_INVALID_PARAM_STRUCT`)
+— слали `paramsSize=4` вместо ровно 2 (`{NvBool bEnable; NvBool bSkipSubmit}`). RM сверяет
+точный размер структуры контрола → фикс на 2 → `NV_OK`.
+
+**Дальше (проход B/C):** B — объект движка CE `AMPERE_DMA_COPY_B (0xC7B5)` на канале
+(`nv_gsp_rm_engine_obj_alloc`); C — pushbuffer (CE копия/семафор) + GPFIFO-запись +
+USERD GP_PUT + doorbell (`AMPERE_USERMODE_A 0xC561`) + поллинг семафора во VRAM.
 
 ---
 

@@ -46,7 +46,7 @@ GPU-виртуальное адресное пространство (корен
 | 1 | **PCIe bring-up** — найти карту, смапить BAR0, прочитать chip ID (`PMC_BOOT_0`) | 🟢 декод подтверждён на железе (kext-загрузка ждёт macOS) |
 | 2 | **GSP bring-up** — поднять GPU через GSP, наладить RPC | 🟢 **ЗАВЕРШЁН на железе** (Linux/VFIO): FWSEC-FRTS→WPR2→Booter→GSP RISC-V active → **`GSP_INIT_DONE` по RPC** |
 | 3 | **Memory management (GMMU/VRAM)** через RPC | 🟢 **A+B+C+D на железе**: RPC/RM-цепочка; FB-control + VASPACE; VRAM memlist; **D — прямой GMMU** (page-tables во VRAM + `COPY_SERVER_RESERVED_PDES`, `status=NV_OK`). RPC `MAP_MEMORY_DMA` — тупик (vGPU-путь) |
-| 4 | Command submission (каналы) | 🟢 A0 на железе: таблица движков прочитана (CE0=0x9); 🔧 framing alloc/bind/schedule канала `AMPERE_CHANNEL_GPFIFO_A`; HW A1/A2 впереди |
+| 4 | Command submission (каналы) | 🟢 **проход A на железе**: таблица движков (CE0=0x9) + канал `AMPERE_CHANNEL_GPFIFO_A` создан+bind+schedule (`NV_OK`) — первый канал GPFIFO в runlist. Дальше объект CE + pushbuffer |
 | 5 | **Display / modeset** — вывод изображения | ⛔ заблокирован моделью Apple (см. выше) |
 | 6 | 3D / compute (Metal) | ⛔ закрытый интерфейс |
 

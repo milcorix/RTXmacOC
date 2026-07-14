@@ -77,25 +77,27 @@
 | `driver/gsp/booter.*` | nova `firmware/booter.rs` | загрузка Booter → GSP-RM в WPR2, старт RISC-V |
 | `driver/gsp/rpc.*` | OGK `message_queue_priv.h`, nouveau `r535.c` | command/status очереди в sysmem, формат RPC, первый handshake |
 
-## Слой 4 — каналы GPFIFO (framing) — 🔧 офлайн 2026-07-15
+## Слой 4 — каналы GPFIFO — 🟢 ПРОХОД A НА ЖЕЛЕЗЕ 2026-07-14
 
 `driver/gsp/gsp_fifo.{c,h}` (порт nouveau `fifo/r535.c`), офлайн-тест
-`tools/gsp_fifo_test.c`. Тех-запись: `docs/gsp-layer4-fifo.md`.
+`tools/gsp_fifo_test.c`. Тех-запись: `docs/gsp-layer4-fifo.md`. Доказательство:
+`docs/hw-dumps/20260714-rtx4070s-layer4-passA-chan-OK.log`.
 
 | Наш код | Upstream | Что взято | Статус |
 |---|---|---|---|
 | классы канала/движка | nouveau `nvif/class.h` + `fifo/ga102.c` | `AMPERE_CHANNEL_GPFIFO_A`=0xC56F, `KEPLER_CHANNEL_GROUP_A`=0xA06C, `AMPERE_USERMODE_A`=0xC561, `AMPERE_DMA_COPY_B`=0xC7B5, `ADA_A`=0xC997, `ADA_COMPUTE_A`=0xC9C0 | 📄 сверено |
-| `nv_gsp_rm_channel_alloc` | `r535_chan_ramfc_write` + `alloc/alloc_channel.h` | `NV_CHANNEL_ALLOC_PARAMS` (360б, compile-probe): gpFifoOffset@8/entries@16/flags@20/hVASpace@28/engineType@128 + instance/userd/ramfc/mthdbuf `NV_MEMORY_DESC_PARAMS`(24б, as=VIDMEM 2); flags PRIV(bit5)\|PAGE_FIXED(bit21) | 🔧 офлайн-framing |
-| `nv_gsp_rm_channel_bind` | `ctrla06fgpfifo.h` `NVA06F_CTRL_CMD_BIND` | RM_CONTROL cmd=0xa06f0104, {engineType} | 🔧 офлайн |
-| `nv_gsp_rm_channel_schedule` | `ctrla06fgpfifo.h` `NVA06F_CTRL_CMD_GPFIFO_SCHEDULE` | RM_CONTROL cmd=0xa06f0103, {bEnable,bSkipSubmit} | 🔧 офлайн |
+| `nv_gsp_rm_channel_alloc` | `r535_chan_ramfc_write` + `alloc/alloc_channel.h` | `NV_CHANNEL_ALLOC_PARAMS` (360б, compile-probe): gpFifoOffset@8/entries@16/flags@20/hVASpace@28/engineType@128 + instance/userd/ramfc/mthdbuf `NV_MEMORY_DESC_PARAMS`(24б, as=VIDMEM 2); flags PRIV(bit5)\|PAGE_FIXED(bit21) | 🟢 HW 2026-07-14 (status=NV_OK) |
+| `nv_gsp_rm_channel_bind` | `ctrla06fgpfifo.h` `NVA06F_CTRL_CMD_BIND` | RM_CONTROL cmd=0xa06f0104, {engineType}(4б) | 🟢 HW 2026-07-14 |
+| `nv_gsp_rm_channel_schedule` | `ctrla06fgpfifo.h` `NVA06F_CTRL_CMD_GPFIFO_SCHEDULE` | RM_CONTROL cmd=0xa06f0103, {bEnable,bSkipSubmit}=**ровно 2б** (4б→`INVALID_PARAM_STRUCT 0x3a`) | 🟢 HW 2026-07-14 |
 | `nv_gsp_rm_engine_obj_alloc` | `r535` (объект движка на канале) | GSP_RM_ALLOC hParent=канал, класс CE/GR | 🔧 офлайн |
 
 | `nv_gsp_fifo_get_device_info` | `r535_fifo_runl_ctor` + `ctrl2080fifo.h` `FIFO_GET_DEVICE_INFO_TABLE` | cmd=0x20801112, params 3212б; парс engineData[16] по ENGINE_INFO_TYPE (ENG_DESC=0/RM_ENGINE_TYPE=2/RUNLIST=3/PRI_BASE=11) | 🟢 HW 2026-07-14 (11 движков, CE0=0x9 runl0) |
 
 `engineType` (NV2080_ENGINE_TYPE_* == RM_ENGINE_TYPE) взят с железа через
-`FIFO_GET_DEVICE_INFO_TABLE` (A0 🟢, CE0=0x9). HW-проходы: A (канал+bind+schedule),
-B (объект движка), C (pushbuffer+семафор). Пруф A0:
-`docs/hw-dumps/20260714-rtx4070s-layer4-A0-devinfo-OK.log`.
+`FIFO_GET_DEVICE_INFO_TABLE` (A0 🟢, CE0=0x9). **Проход A (A0+A1+A2) на железе 🟢**:
+канал `AMPERE_CHANNEL_GPFIFO_A` создан+bind+schedule, всё `NV_OK`. Пруф:
+`docs/hw-dumps/20260714-rtx4070s-layer4-passA-chan-OK.log`. Дальше:
+B (объект движка CE), C (pushbuffer+семафор).
 
 ## Конкретные upstream-ссылки (raw, ветка master ядра)
 

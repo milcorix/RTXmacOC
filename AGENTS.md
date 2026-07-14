@@ -159,14 +159,17 @@ docs/                   архитектура, роадмап, конспект
 - Спека: `.kiro/specs/rtx-tahoe-full-support/` (requirements/design/tasks).
 - Прогон без ребута/монитора: `tools/run-gsp-boot-detached.sh` (весь слой 2 + слой 3
   проходы A/B/C/D), `tools/run-fwsec-detached.sh` (только FWSEC). Linux/VFIO, возвращают GUI.
-- Слой 4 (каналы): 🔧 **framing + офлайн-тест 2026-07-15**. `driver/gsp/gsp_fifo.{c,h}`
-  (`nv_gsp_rm_channel_alloc`/`bind`/`schedule`/`engine_obj_alloc`), класс
-  `AMPERE_CHANNEL_GPFIFO_A (0xC56F)`, params `NV_CHANNEL_ALLOC_PARAMS` (360б, compile-probe),
-  контролы `NVA06F_CTRL_CMD_BIND/GPFIFO_SCHEDULE`. Порт nouveau `r535_chan_ramfc_write`.
-  Тех-запись: **`docs/gsp-layer4-fifo.md`**. **A0 🟢 HW 2026-07-14**: прочитана
-  таблица движков (11 шт.), CE0 engineType=0x9 runlist=0
-  (`docs/hw-dumps/20260714-rtx4070s-layer4-A0-devinfo-OK.log`). Дальше HW: A1 (буферы
-  во VRAM + GPFIFO в GPU-VA прямым GMMU) → A2 (alloc+bind+schedule).
+- Слой 4 (каналы): 🟢 **ПРОХОД A НА ЖЕЛЕЗЕ 2026-07-14**. `driver/gsp/gsp_fifo.{c,h}`
+  (`nv_gsp_fifo_get_device_info`, `nv_gsp_rm_channel_alloc`/`bind`/`schedule`/`engine_obj_alloc`),
+  класс `AMPERE_CHANNEL_GPFIFO_A (0xC56F)`, params `NV_CHANNEL_ALLOC_PARAMS` (360б, compile-probe),
+  контролы `NVA06F_CTRL_CMD_BIND (0xa06f0104)`/`GPFIFO_SCHEDULE (0xa06f0103)`. Порт nouveau
+  `r535_chan_ramfc_write`. Тех-запись: **`docs/gsp-layer4-fifo.md`**. **A0**: таблица
+  движков (11 шт.), CE0 engineType=0x9 runlist=0. **A1**: буферы instance/USERD/GPFIFO
+  во VRAM (кольцо в GPU-VA прохода D). **A2**: `channel_alloc`+`BIND`+`GPFIFO_SCHEDULE`,
+  всё `NV_OK` — канал в runlist. Грабли: SCHEDULE-params ровно 2б (иначе
+  `NV_ERR_INVALID_PARAM_STRUCT 0x3a`). Пруф:
+  `docs/hw-dumps/20260714-rtx4070s-layer4-passA-chan-OK.log`. Дальше: B (объект движка
+  CE `AMPERE_DMA_COPY_B`), C (pushbuffer + семафор).
 
 ## Ключевые источники (референс-база)
 
