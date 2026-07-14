@@ -36,6 +36,7 @@
 #include "../driver/gsp/gsp_rm.h"
 #include "../driver/gsp/gmmu.h"
 #include "../driver/gsp/gsp_fifo.h"
+#include "../driver/gsp/gsp_disp.h"
 #include "../driver/gsp/fw_blob.h"
 
 #define TIMEOUT_US (2u * 1000u * 1000u)
@@ -477,6 +478,7 @@ static int run(const nv_mmio_t *io, struct arena *ar, const char *bdf)
     int l3_static_ok = 0, l3_chain_ok = 0, l3_ctrl_ok = 0, l3_vaspace_ok = 0;
     int l3_vram_ok = 0, l3_map_ok = 0;
     int l4_devinfo_ok = 0, l4_ce_engtype = -1, l4_chan_ok = 0, l4_bind_ok = 0, l4_sched_ok = 0;
+    int l5_disp_ok = 0;
     int l4_ce_obj_ok = 0, l4_exec_ok = 0; uint32_t l4_ce_runlist = 0;
     if (got) {
         nv_gsp_rpc_chan ch;
@@ -767,6 +769,25 @@ static int run(const nv_mmio_t *io, struct arena *ar, const char *bdf)
                l3_ctrl_ok?"OK":"нет", l3_vaspace_ok?"OK":"нет",
                l3_vram_ok?"OK":"нет", l3_map_ok?"OK":"нет");
 
+        /* ===================== СЛОЙ 5 (A0): энумерация дисплея =====================
+           NV04_DISPLAY_COMMON (0x0073) под device → контролы NV0073_*: число heads и
+           маска поддерживаемых дисплеев. Порт r535_disp_oneinit. Headless (без монитора). */
+        if (l3_chain_ok) {
+            uint32_t hdisp = 0, dst = 0xffffffffu;
+            int drc = nv_gsp_disp_common_alloc(&ch, hcli, hdev, &hdisp, &dst);
+            printf("СЛОЙ 5 A0: NV04_DISPLAY_COMMON rc=%d status=0x%x handle=0x%08x%s\n",
+                   drc, dst, hdisp, (drc==NV_GSP_RM_OK && dst==0) ? "" : "  (не OK)");
+            if (drc == NV_GSP_RM_OK && dst == 0) {
+                uint32_t nheads = 0, hst = 0xffffffffu;
+                int hrc = nv_gsp_disp_get_num_heads(&ch, hcli, hdisp, &nheads, &hst);
+                uint32_t dmask = 0, dddc = 0, sst = 0xffffffffu;
+                int src = nv_gsp_disp_get_supported(&ch, hcli, hdisp, &dmask, &dddc, &sst);
+                printf("СЛОЙ 5 A0: NUM_HEADS rc=%d status=0x%x heads=%u; GET_SUPPORTED rc=%d status=0x%x displayMask=0x%x DDC=0x%x\n",
+                       hrc, hst, nheads, src, sst, dmask, dddc);
+                l5_disp_ok = (hrc==NV_GSP_RM_OK && hst==0 && src==NV_GSP_RM_OK && sst==0 &&
+                              nheads > 0 && dmask != 0);
+            }
+        }
     }
 
     /* --- диагностика: тронул ли GSP очереди/логи --- */
@@ -816,6 +837,8 @@ static int run(const nv_mmio_t *io, struct arena *ar, const char *bdf)
         if (l4_devinfo_ok)
             printf("*** СЛОЙ 4 (проход A0): FIFO device-info прочитан — движки GPU перечислены%s ***\n",
                    (l4_ce_engtype >= 0) ? ", CE0 найден" : "");
+        if (l5_disp_ok)
+            printf("*** СЛОЙ 5 (A0): дисплейный движок перечислен — NV04_DISPLAY_COMMON + heads + displayMask ***\n");
         if (l4_ce_obj_ok)
             printf("*** СЛОЙ 4 (проход B): объект copy-engine (AMPERE_DMA_COPY_B) на канале — OK ***\n");
         if (l4_exec_ok)

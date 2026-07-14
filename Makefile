@@ -17,7 +17,7 @@ PROBE_BIN = pcie_probe
 DUMP_DIR  = docs/hw-dumps
 DATE     := $(shell date +%Y%m%d)
 
-.PHONY: probe run dump clean mmio-linux vbios-dump booter-parse-test booter-run-linux gsp-stage-test gsp-boot-linux gsp-rpc-test gsp-rm-test gmmu-test gsp-fifo-test
+.PHONY: probe run dump clean mmio-linux vbios-dump booter-parse-test booter-run-linux gsp-stage-test gsp-boot-linux gsp-rpc-test gsp-rm-test gmmu-test gsp-fifo-test gsp-disp-test
 
 probe: $(PROBE_BIN)
 
@@ -59,6 +59,7 @@ gsp-boot-linux:
 	   driver/gsp/falcon.c driver/gsp/fwsec_locate.c driver/gsp/fwsec_patch.c \
 	   driver/gsp/fb_layout.c driver/gsp/booter.c driver/gsp/gsp_fw.c driver/gsp/elf64.c \
 	   driver/gsp/gsp_rpc.c driver/gsp/gsp_rm.c driver/gsp/gmmu.c driver/gsp/gsp_fifo.c \
+	   driver/gsp/gsp_disp.c \
 	   -o tools/gsp_boot_linux
 
 # Офлайн-проверка раскладки очередей GSP-RM (слой 2, задача 7). Без GPU.
@@ -82,6 +83,13 @@ gmmu-test:
 gsp-fifo-test:
 	cc -Wall -Wextra -O2 tools/gsp_fifo_test.c driver/gsp/gsp_fifo.c \
 	   driver/gsp/gsp_rm.c driver/gsp/gsp_rpc.c -o tools/gsp_fifo_test
+
+# Офлайн-тест слоя 5 (дисплей): framing NV04_DISPLAY_COMMON alloc + GET_NUM_HEADS +
+# GET_SUPPORTED. Без GPU.
+#   make gsp-disp-test && ./tools/gsp_disp_test
+gsp-disp-test:
+	cc -Wall -Wextra -O2 tools/gsp_disp_test.c driver/gsp/gsp_disp.c \
+	   driver/gsp/gsp_rm.c driver/gsp/gsp_rpc.c -o tools/gsp_disp_test
 
 # Чтение/разбор VBIOS карты (слой 2, шаг 1). Портируемо, собирается любым cc.
 #   make vbios-dump && ./tools/vbios_dump <rom_file>
