@@ -44,7 +44,7 @@ Big Sur+ нет (library validation + приватные интерфейсы + 
 | 1 | PCIe bring-up, чтение `PMC_BOOT_0` | 🟡 CI (на железе не запускался) | `pcie_probe.c`, `ada_regs.h`, `driver/RTXProbe/`, `driver/RTXProbeDext/` |
 | 2 | GSP bring-up (FWSEC-FRTS→WPR2→GSP-RM→`GSP_INIT_DONE`) | 🟢 HW 2026-06-30 (Linux/VFIO) для `driver/gsp/*`; macOS-kext-шим `FwsecRun.cpp` — 🟡 CI | `tools/{vbios_dump,fwsec_run_linux,gsp_boot_linux}.c`, `falcon_regs.h`, `driver/gsp/*` |
 | 3 | Память (GMMU/VRAM) | 🟢 HW **A** (RPC + RM client/device/subdevice) + **B** (RM_CONTROL/FB_GET_INFO_V2 + FERMI_VASPACE_A/GMMU) + **C** (VRAM memlist NV01_MEMORY_LIST_FBMEM) + **D** (прямой GMMU: page-tables во VRAM + COPY_SERVER_RESERVED_PDES, 2026-07-14), 2026-06-30..07-14 | `driver/gsp/{gsp_rm,gmmu}.*`, `tools/{gsp_boot_linux,gsp_rm_test,gmmu_test}.c` |
-| 4 | Каналы (command submission: FIFO/GR) | 🟢 **ПРОХОДЫ A+B НА ЖЕЛЕЗЕ 2026-07-14**: A0 (таблица движков, CE0=0x9) + A1 (буферы VRAM) + A2 (channel alloc `AMPERE_CHANNEL_GPFIFO_A` + BIND + SCHEDULE) + B (объект CE `AMPERE_DMA_COPY_B` на канале), всё `NV_OK`. Дальше C (pushbuffer+семафор = исполнение команды) | `driver/gsp/gsp_fifo.*`, `tools/gsp_fifo_test.c` |
+| 4 | Каналы (command submission: FIFO/GR) | 🟢 **ЗАМКНУТ НА ЖЕЛЕЗЕ 2026-07-14**: A (канал `AMPERE_CHANNEL_GPFIFO_A`+BIND+SCHEDULE) + B (объект CE `AMPERE_DMA_COPY_B`) + C (**pushbuffer исполнен, host-семафор `0xcafe0001`** — первая команда GPU), всё `NV_OK` | `driver/gsp/gsp_fifo.*`, `tools/gsp_fifo_test.c` |
 | 5–6 | дисплей/Metal | ⏳ (дисплей — заблокирован Apple, см. graphics-stack) | — |
 
 ---
@@ -234,7 +234,11 @@ WPR2-границы, GFW boot, `NV_PGSP_QUEUE_HEAD`.
   Грабли: SCHEDULE-params ровно 2 байта (иначе `NV_ERR_INVALID_PARAM_STRUCT 0x3a`).
 - **B 🟢 HW**: `nv_gsp_rm_ce_obj_alloc` — объект `AMPERE_DMA_COPY_B (0xC7B5)` на канале
   (`NVB0B5_ALLOCATION_PARAMETERS{version=1, engineType=CE0}`) → `status=NV_OK`, handle=0xce00.
-  Пруф: `docs/hw-dumps/20260714-rtx4070s-layer4-passB-ceobj-OK.log`. Дальше C (pushbuffer+семафор).
+  Пруф: `docs/hw-dumps/20260714-rtx4070s-layer4-passB-ceobj-OK.log`.
+- **C 🟢 HW**: pushbuffer с методом CE `SEMAPHORE_RELEASE` во VRAM (в GPU-VA) + GPFIFO-запись
+  + USERD GP_PUT + doorbell (`AMPERE_USERMODE_A 0xC561`, VFN `0xbb0090`) → GPU записал
+  host-семафор `payload=0xcafe0001`, read-back `MATCH`. **Первая команда GPU исполнена.**
+  Пруф: `docs/hw-dumps/20260714-rtx4070s-layer4-passC-exec-OK.log`. Слой 4 замкнут.
 
 - `nv_gsp_rm_channel_alloc` — `GSP_RM_ALLOC` класс `AMPERE_CHANNEL_GPFIFO_A (0xC56F)`
   под device, params `NV_CHANNEL_ALLOC_PARAMS` (360б, compile-probe): GPU-VA кольца

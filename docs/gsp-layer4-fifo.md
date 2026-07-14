@@ -1,11 +1,12 @@
 # Слой 4 — command submission (каналы FIFO/GR) через GSP-RM
 
-**Статус:** 🟢 **ПРОХОДЫ A+B НА ЖЕЛЕЗЕ 2026-07-14** (RTX 4070S, Linux/VFIO): A0 (таблица
-движков) + A1 (буферы во VRAM) + A2 (channel alloc + BIND + SCHEDULE) + **B (объект
-copy-engine `AMPERE_DMA_COPY_B` на канале)** — всё `NV_OK`. Канал `AMPERE_CHANNEL_GPFIFO_A`
-(CE0) создан, запланирован в runlist, на нём висит объект CE.
-**Доказательство:** `docs/hw-dumps/20260714-rtx4070s-layer4-passA-chan-OK.log` (A),
-`docs/hw-dumps/20260714-rtx4070s-layer4-passB-ceobj-OK.log` (B).
+**Статус:** 🟢 **СЛОЙ 4 ЗАМКНУТ НА ЖЕЛЕЗЕ 2026-07-14** (RTX 4070S, Linux/VFIO): A0 (таблица
+движков) + A1 (буферы во VRAM) + A2 (channel alloc + BIND + SCHEDULE) + B (объект
+copy-engine `AMPERE_DMA_COPY_B` на канале) + **C (pushbuffer исполнен, host-семафор
+`0xcafe0001`)** — всё `NV_OK`. Полный путь submission: канал → движок → doorbell →
+исполнение → семафор. **Первая команда GPU исполнена на железе.**
+**Доказательства:** `docs/hw-dumps/20260714-rtx4070s-layer4-passA-chan-OK.log` (A),
+`...-passB-ceobj-OK.log` (B), `...-passC-exec-OK.log` (C).
 Эталон — nouveau `nvkm/engine/fifo/r535.c` (`r535_chan_ramfc_write`), классы из
 `nvif/class.h`, структуры из nvrm 535.113.01 (`alloc/alloc_channel.h`, `ctrl/ctrla06f/*`).
 
@@ -151,10 +152,17 @@ device-info — подшаг A0 (следующий за этим framing-сло
 `NVB0B5_ALLOCATION_PARAMETERS{version=1, engineType=CE0}` → `status=NV_OK`. Сверено с
 OGK `clb0b5sw.h`. Пруф: `docs/hw-dumps/20260714-rtx4070s-layer4-passB-ceobj-OK.log`.
 
-**Дальше (проход C — исполнение команды):** pushbuffer с методами CE (копия или
-`SEMAPHORE_*`/`SEMAPHORE_RELEASE`) во VRAM (в замапленном GPU-VA), GPFIFO-запись
-(адрес+длина pushbuffer), USERD GP_PUT, doorbell (`AMPERE_USERMODE_A 0xC561` — регистр
-VFN), поллинг семафора во VRAM. Это первая реально исполненная команда GPU.
+**Проход C 🟢 HW 2026-07-14 — ПЕРВАЯ КОМАНДА GPU ИСПОЛНЕНА.** Pushbuffer с методом
+copy-engine `SEMAPHORE_RELEASE` собран во VRAM (в замапленном GPU-VA), положена
+GPFIFO-запись (адрес+длина pushbuffer), обновлён USERD GP_PUT, удар в doorbell
+(`AMPERE_USERMODE_A 0xC561`, VFN-регистр `0xbb0090`). GPU исполнил: host-семафор во
+VRAM получил `payload=0xcafe0001`, read-back совпал (`got=0xcafe0001`). Лог:
+```
+СЛОЙ 4 C: sem-release payload=0xcafe0001 got=0xcafe0001 doorbell(0xbb0090)=0x0 ★ ИСПОЛНЕНО ★
+```
+Пруф: `docs/hw-dumps/20260714-rtx4070s-layer4-passC-exec-OK.log`. **Слой 4 замкнут
+целиком** (канал → движок → doorbell → исполнение → семафор). Дальше — слой 5
+(дисплей/modeset), упирающийся в замок Apple.
 
 ---
 

@@ -13,6 +13,13 @@
 
 Подробности стратегии — `docs/ARCHITECTURE.md`. План — `docs/ROADMAP_MONTH1.md`.
 
+### Имя драйвера/ядра
+- Кодовое имя ядра драйвера: **`milcorix-1.0`**. Итоговый macOS-драйвер (kext/DriverKit)
+  должен в системе показывать **реальную видеокарту** — «NVIDIA GeForce RTX 4070 SUPER»
+  (AD104, `10DE:2783`), **без спуфа** под чужой чип (в отличие от OCLP-патчей, которые
+  выдают карту за GTX 780 Ti). Реальная модель/VRAM берутся из наших слоёв 1–3
+  (`PMC_BOOT_0`, `GET_GSP_STATIC_INFO`, `FB_GET_INFO_V2`).
+
 ### Не-цели
 - Не eGPU на настоящем Маке, не Apple Silicon.
 - Не покупка второй видеокарты как часть продукта (RTX = единственная карта).
@@ -159,7 +166,7 @@ docs/                   архитектура, роадмап, конспект
 - Спека: `.kiro/specs/rtx-tahoe-full-support/` (requirements/design/tasks).
 - Прогон без ребута/монитора: `tools/run-gsp-boot-detached.sh` (весь слой 2 + слой 3
   проходы A/B/C/D), `tools/run-fwsec-detached.sh` (только FWSEC). Linux/VFIO, возвращают GUI.
-- Слой 4 (каналы): 🟢 **ПРОХОД A НА ЖЕЛЕЗЕ 2026-07-14**. `driver/gsp/gsp_fifo.{c,h}`
+- Слой 4 (каналы): 🟢 **ЗАМКНУТ НА ЖЕЛЕЗЕ 2026-07-14** (A+B+C). `driver/gsp/gsp_fifo.{c,h}`
   (`nv_gsp_fifo_get_device_info`, `nv_gsp_rm_channel_alloc`/`bind`/`schedule`/`engine_obj_alloc`),
   класс `AMPERE_CHANNEL_GPFIFO_A (0xC56F)`, params `NV_CHANNEL_ALLOC_PARAMS` (360б, compile-probe),
   контролы `NVA06F_CTRL_CMD_BIND (0xa06f0104)`/`GPFIFO_SCHEDULE (0xa06f0103)`. Порт nouveau
@@ -169,9 +176,12 @@ docs/                   архитектура, роадмап, конспект
   всё `NV_OK` — канал в runlist. **B**: `nv_gsp_rm_ce_obj_alloc` — объект
   `AMPERE_DMA_COPY_B (0xC7B5)` на канале (`NVB0B5_ALLOCATION_PARAMETERS{version=1,
   engineType=CE0}`) → `status=NV_OK`. Грабли A2: SCHEDULE-params ровно 2б (иначе
-  `NV_ERR_INVALID_PARAM_STRUCT 0x3a`). Пруфы:
-  `docs/hw-dumps/20260714-rtx4070s-layer4-pass{A-chan,B-ceobj}-OK.log`. Дальше: C
-  (pushbuffer с CE-методами + GPFIFO-запись + USERD GP_PUT + doorbell + семафор).
+  `NV_ERR_INVALID_PARAM_STRUCT 0x3a`). **C**: pushbuffer с CE `SEMAPHORE_RELEASE` во
+  VRAM (в GPU-VA) + GPFIFO-запись + USERD GP_PUT + doorbell (`AMPERE_USERMODE_A 0xC561`,
+  VFN `0xbb0090`) → GPU записал host-семафор `0xcafe0001`, read-back MATCH — **ПЕРВАЯ
+  КОМАНДА GPU ИСПОЛНЕНА**. Путь submission замкнут. Пруфы:
+  `docs/hw-dumps/20260714-rtx4070s-layer4-pass{A-chan,B-ceobj,C-exec}-OK.log`.
+  Дальше: слой 5 (дисплей/modeset) — упирается в замок Apple.
 
 ## Ключевые источники (референс-база)
 

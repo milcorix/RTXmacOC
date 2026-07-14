@@ -98,7 +98,10 @@
 канал `AMPERE_CHANNEL_GPFIFO_A` создан+bind+schedule, всё `NV_OK`. Пруф:
 `docs/hw-dumps/20260714-rtx4070s-layer4-passA-chan-OK.log`. **Проход B 🟢** (объект
 CE `AMPERE_DMA_COPY_B` на канале, `docs/hw-dumps/20260714-rtx4070s-layer4-passB-ceobj-OK.log`).
-Дальше: C (pushbuffer + семафор = исполнение команды).
+**Проход C 🟢 HW** — pushbuffer с CE `SEMAPHORE_RELEASE` + GPFIFO-запись + USERD GP_PUT +
+doorbell (`AMPERE_USERMODE_A 0xC561`) → host-семафор `0xcafe0001`, read-back MATCH.
+Первая команда GPU исполнена; слой 4 замкнут. Пруф:
+`docs/hw-dumps/20260714-rtx4070s-layer4-passC-exec-OK.log`.
 
 ## Конкретные upstream-ссылки (raw, ветка master ядра)
 

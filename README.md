@@ -46,7 +46,7 @@ GPU-виртуальное адресное пространство (корен
 | 1 | **PCIe bring-up** — найти карту, смапить BAR0, прочитать chip ID (`PMC_BOOT_0`) | 🟢 декод подтверждён на железе (kext-загрузка ждёт macOS) |
 | 2 | **GSP bring-up** — поднять GPU через GSP, наладить RPC | 🟢 **ЗАВЕРШЁН на железе** (Linux/VFIO): FWSEC-FRTS→WPR2→Booter→GSP RISC-V active → **`GSP_INIT_DONE` по RPC** |
 | 3 | **Memory management (GMMU/VRAM)** через RPC | 🟢 **A+B+C+D на железе**: RPC/RM-цепочка; FB-control + VASPACE; VRAM memlist; **D — прямой GMMU** (page-tables во VRAM + `COPY_SERVER_RESERVED_PDES`, `status=NV_OK`). RPC `MAP_MEMORY_DMA` — тупик (vGPU-путь) |
-| 4 | Command submission (каналы) | 🟢 **проходы A+B на железе**: таблица движков (CE0=0x9) + канал `AMPERE_CHANNEL_GPFIFO_A` (создан+bind+schedule) + объект copy-engine `AMPERE_DMA_COPY_B` на канале (`NV_OK`). Дальше pushbuffer+семафор |
+| 4 | Command submission (каналы) | 🟢 **ЗАМКНУТ на железе**: канал `AMPERE_CHANNEL_GPFIFO_A` (A) + объект CE `AMPERE_DMA_COPY_B` (B) + **pushbuffer исполнен, host-семафор `0xcafe0001` (C) — первая команда GPU**. Весь путь submission работает |
 | 5 | **Display / modeset** — вывод изображения | ⛔ заблокирован моделью Apple (см. выше) |
 | 6 | 3D / compute (Metal) | ⛔ закрытый интерфейс |
 
