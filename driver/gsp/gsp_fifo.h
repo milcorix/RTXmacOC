@@ -75,8 +75,8 @@
 /* --- Контролы канала (ctrla06fgpfifo.h) --- */
 #define NVA06F_CTRL_CMD_GPFIFO_SCHEDULE  0xa06f0103u  /* {NvBool bEnable; NvBool bSkipSubmit} */
 #define NVA06F_CTRL_CMD_BIND             0xa06f0104u  /* {NvU32 engineType} */
-#define NVA06F_CTRL_BIND_PARAMS_SIZE          4u
-#define NVA06F_CTRL_SCHEDULE_PARAMS_SIZE      4u   /* 2 байта, шлём выровненно 4 */
+#define NVA06F_CTRL_BIND_PARAMS_SIZE          4u   /* {NvU32 engineType} */
+#define NVA06F_CTRL_SCHEDULE_PARAMS_SIZE      2u   /* {NvBool bEnable; NvBool bSkipSubmit} — RM сверяет точный размер */
 
 /* Конфигурация канала: физ-адреса буферов во VRAM + GPU-VA кольца GPFIFO. */
 typedef struct {
