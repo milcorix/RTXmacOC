@@ -44,7 +44,8 @@ Big Sur+ нет (library validation + приватные интерфейсы + 
 | 1 | PCIe bring-up, чтение `PMC_BOOT_0` | 🟡 CI (на железе не запускался) | `pcie_probe.c`, `ada_regs.h`, `driver/RTXProbe/`, `driver/RTXProbeDext/` |
 | 2 | GSP bring-up (FWSEC-FRTS→WPR2→GSP-RM→`GSP_INIT_DONE`) | 🟢 HW 2026-06-30 (Linux/VFIO) для `driver/gsp/*`; macOS-kext-шим `FwsecRun.cpp` — 🟡 CI | `tools/{vbios_dump,fwsec_run_linux,gsp_boot_linux}.c`, `falcon_regs.h`, `driver/gsp/*` |
 | 3 | Память (GMMU/VRAM) | 🟢 HW **A** (RPC + RM client/device/subdevice) + **B** (RM_CONTROL/FB_GET_INFO_V2 + FERMI_VASPACE_A/GMMU) + **C** (VRAM memlist NV01_MEMORY_LIST_FBMEM) + **D** (прямой GMMU: page-tables во VRAM + COPY_SERVER_RESERVED_PDES, 2026-07-14), 2026-06-30..07-14 | `driver/gsp/{gsp_rm,gmmu}.*`, `tools/{gsp_boot_linux,gsp_rm_test,gmmu_test}.c` |
-| 4–6 | каналы/дисплей/Metal | ⏳ (дисплей — заблокирован Apple, см. graphics-stack) | — |
+| 4 | Каналы (command submission: FIFO/GR) | 🔧 framing + офлайн-тест 2026-07-15 (channel alloc/bind/schedule, класс AMPERE_CHANNEL_GPFIFO_A, compile-probe params=360); HW впереди (буферы+VA) | `driver/gsp/gsp_fifo.*`, `tools/gsp_fifo_test.c` |
+| 5–6 | дисплей/Metal | ⏳ (дисплей — заблокирован Apple, см. graphics-stack) | — |
 
 ---
 
@@ -213,6 +214,31 @@ WPR2-границы, GFW boot, `NV_PGSP_QUEUE_HEAD`.
   `COPY_SERVER_RESERVED_PDES status=NV_OK`, read-back листовой PTE `MATCH`
   (`0x1310001` = `(0x13100000>>4)|VALID`). **VRAM в GPU VA-пространстве.**
 - **Полная тех-запись: `docs/gsp-layer3-rpc.md`** §4D (§4D.3 — реализация).
+
+---
+
+---
+
+## Слой 4 — каналы (command submission) — 🔧 framing + офлайн 2026-07-15
+
+Первый шаг слоя 4: поднять канал GPFIFO через GSP-RM (порт nouveau
+`r535_chan_ramfc_write`). Новый модуль `driver/gsp/gsp_fifo.{c,h}` + офлайн-тест
+`tools/gsp_fifo_test.c` (`make gsp-fifo-test`). Тех-запись и план проходов A/B/C —
+`docs/gsp-layer4-fifo.md`.
+
+- `nv_gsp_rm_channel_alloc` — `GSP_RM_ALLOC` класс `AMPERE_CHANNEL_GPFIFO_A (0xC56F)`
+  под device, params `NV_CHANNEL_ALLOC_PARAMS` (360б, compile-probe): GPU-VA кольца
+  GPFIFO (из прямого GMMU слоя 3), `hVASpace`, `engineType`, физ-дескрипторы
+  instance/USERD/RAMFC/method-buffer (`NV_MEMORY_DESC_PARAMS`, addressSpace VIDMEM=2).
+- `nv_gsp_rm_channel_bind` / `nv_gsp_rm_channel_schedule` — `RM_CONTROL`
+  `NVA06F_CTRL_CMD_BIND (0xa06f0104)` / `GPFIFO_SCHEDULE (0xa06f0103)`.
+- `nv_gsp_rm_engine_obj_alloc` — объект движка на канале (CE `AMPERE_DMA_COPY_B 0xC7B5`).
+- Классы Ada сверены с `nvif/class.h`: канал 0xC56F, CE 0xC7B5, GR `ADA_A 0xC997`,
+  compute `ADA_COMPUTE_A 0xC9C0`, usermode/doorbell `AMPERE_USERMODE_A 0xC561`.
+
+**Статус:** офлайн-framing зелёный (sizeof/offset + cmdq-фрейминг). **HW впереди:**
+подшаг A0 (`FIFO_GET_DEVICE_INFO_TABLE` → engineType/runlist), A1 (буферы во VRAM +
+GPFIFO в GPU-VA прямым GMMU), A2 (alloc+bind+schedule на железе = метрика прохода A).
 
 ---
 

@@ -17,7 +17,7 @@ PROBE_BIN = pcie_probe
 DUMP_DIR  = docs/hw-dumps
 DATE     := $(shell date +%Y%m%d)
 
-.PHONY: probe run dump clean mmio-linux vbios-dump booter-parse-test booter-run-linux gsp-stage-test gsp-boot-linux gsp-rpc-test gsp-rm-test gmmu-test
+.PHONY: probe run dump clean mmio-linux vbios-dump booter-parse-test booter-run-linux gsp-stage-test gsp-boot-linux gsp-rpc-test gsp-rm-test gmmu-test gsp-fifo-test
 
 probe: $(PROBE_BIN)
 
@@ -58,7 +58,7 @@ gsp-boot-linux:
 	cc -Wall -Wextra -O2 tools/gsp_boot_linux.c tools/fw_blob_linux.c \
 	   driver/gsp/falcon.c driver/gsp/fwsec_locate.c driver/gsp/fwsec_patch.c \
 	   driver/gsp/fb_layout.c driver/gsp/booter.c driver/gsp/gsp_fw.c driver/gsp/elf64.c \
-	   driver/gsp/gsp_rpc.c driver/gsp/gsp_rm.c driver/gsp/gmmu.c \
+	   driver/gsp/gsp_rpc.c driver/gsp/gsp_rm.c driver/gsp/gmmu.c driver/gsp/gsp_fifo.c \
 	   -o tools/gsp_boot_linux
 
 # Офлайн-проверка раскладки очередей GSP-RM (слой 2, задача 7). Без GPU.
@@ -75,6 +75,13 @@ gsp-rm-test:
 #   make gmmu-test && ./tools/gmmu_test
 gmmu-test:
 	cc -Wall -Wextra -O2 tools/gmmu_test.c driver/gsp/gmmu.c -o tools/gmmu_test
+
+# Офлайн-тест слоя 4 (каналы GPFIFO): compile-probe NV_CHANNEL_ALLOC_PARAMS +
+# framing channel alloc/bind/schedule. Без GPU.
+#   make gsp-fifo-test && ./tools/gsp_fifo_test
+gsp-fifo-test:
+	cc -Wall -Wextra -O2 tools/gsp_fifo_test.c driver/gsp/gsp_fifo.c \
+	   driver/gsp/gsp_rm.c driver/gsp/gsp_rpc.c -o tools/gsp_fifo_test
 
 # Чтение/разбор VBIOS карты (слой 2, шаг 1). Портируемо, собирается любым cc.
 #   make vbios-dump && ./tools/vbios_dump <rom_file>

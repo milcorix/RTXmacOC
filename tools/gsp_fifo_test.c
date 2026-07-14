@@ -1,0 +1,207 @@
+/*
+ * gsp_fifo_test.c — офлайн-тест слоя 4 (каналы GPFIFO) без GPU.
+ *
+ * 1) compile-probe раскладки NV_CHANNEL_ALLOC_PARAMS/NV_MEMORY_DESC_PARAMS
+ *    (sizeof + offsetof, NV_DECLARE_ALIGNED) против зеркала структуры;
+ * 2) framing: channel_alloc (класс AMPERE_CHANNEL_GPFIFO_A, поля params),
+ *    bind (cmd 0xa06f0104), schedule (cmd 0xa06f0103) на синтетическом канале.
+ *
+ * Собрать: make gsp-fifo-test ; запустить: ./tools/gsp_fifo_test
+ */
+#include <stdio.h>
+#include <string.h>
+#include <stdint.h>
+#include <stddef.h>
+#include "../driver/gsp/gsp_fifo.h"
+
+static int failed = 0;
+#define CHECK(cond, msg) do { if (!(cond)) { printf("  FAIL: %s\n", msg); failed = 1; } \
+                              else printf("  ok: %s\n", msg); } while (0)
+
+static void st32(uint8_t *p, uint32_t v)
+{ p[0]=(uint8_t)v; p[1]=(uint8_t)(v>>8); p[2]=(uint8_t)(v>>16); p[3]=(uint8_t)(v>>24); }
+static uint32_t ld32(const uint8_t *p)
+{ return (uint32_t)p[0]|((uint32_t)p[1]<<8)|((uint32_t)p[2]<<16)|((uint32_t)p[3]<<24); }
+static uint64_t ld64(const uint8_t *p)
+{ uint64_t v=0; for(int i=0;i<8;i++) v|=(uint64_t)p[i]<<(8*i); return v; }
+
+static void noop_ring(void *c){ (void)c; }
+static void noop_udelay(void *c, uint32_t us){ (void)c; (void)us; }
+
+static uint8_t g_shm[1u << 20];
+
+static void put_msg(uint8_t *shm, const nv_gsp_shm_layout_t *lay, uint32_t slot,
+                    uint32_t fn, uint32_t rpc_result, const uint8_t *payload,
+                    uint32_t plen, uint32_t ec)
+{
+    uint8_t *e = shm + lay->msgq_off + NV_GSP_QUEUE_ENTRYOFF + (size_t)slot * NV_GSP_QUEUE_MSGSIZE;
+    memset(e, 0, (size_t)ec * 0x1000u);
+    st32(e + NV_GSP_MSG_ELEMCOUNT_OFF, ec);
+    uint8_t *r = e + NV_GSP_RPC_HDR_OFF;
+    st32(r + 0,  NV_GSP_RPC_HEADER_VERSION);
+    st32(r + 4,  NV_GSP_RPC_SIGNATURE);
+    st32(r + NV_GSP_RPC_F_LENGTH,   NV_GSP_RPC_HDR_SIZE + plen);
+    st32(r + NV_GSP_RPC_F_FUNCTION, fn);
+    st32(r + 16, rpc_result);
+    if (payload && plen) memcpy(e + NV_GSP_RPC_PAYLOAD_OFF, payload, plen);
+}
+static void set_msgq_wptr(uint8_t *shm, const nv_gsp_shm_layout_t *lay, uint32_t w)
+{ st32(shm + lay->msgq_off + NV_MSGQ_TX_WRITEPTR_OFF, w); }
+
+static void chan_init(nv_gsp_rpc_chan *ch)
+{
+    nv_gsp_shm_layout_t lay;
+    int rc = nv_gsp_shm_init(g_shm, sizeof(g_shm), 0x10000000ull, &lay);
+    if (rc != NV_GSP_RPC_OK) { printf("  FAIL: shm_init rc=%d\n", rc); failed = 1; }
+    memset(ch, 0, sizeof(*ch));
+    ch->shm = g_shm; ch->lay = lay;
+    ch->cmdq_wptr = 0; ch->seq = 0; ch->msgq_rptr = 0;
+    ch->io_ctx = NULL; ch->ring = noop_ring; ch->udelay = noop_udelay;
+}
+
+/* --- зеркало для compile-probe раскладки --- */
+struct memdesc_mirror { uint64_t base; uint64_t size; uint32_t addressSpace; uint32_t cacheAttrib; };
+struct chan_alloc_mirror {
+    uint32_t hObjectError;
+    uint32_t hObjectBuffer;
+    uint64_t gpFifoOffset;
+    uint32_t gpFifoEntries;
+    uint32_t flags;
+    uint32_t hContextShare;
+    uint32_t hVASpace;
+    uint32_t hUserdMemory[8];
+    uint64_t userdOffset[8];
+    uint32_t engineType;
+    uint32_t cid;
+    uint32_t subDeviceId;
+    uint32_t hObjectEccError;
+    struct memdesc_mirror instanceMem;
+    struct memdesc_mirror userdMem;
+    struct memdesc_mirror ramfcMem;
+    struct memdesc_mirror mthdbufMem;
+    uint32_t hPhysChannelGroup;
+    uint32_t internalFlags;
+    struct memdesc_mirror errorNotifierMem;
+    struct memdesc_mirror eccErrorNotifierMem;
+    uint32_t ProcessID;
+    uint32_t SubProcessID;
+    uint32_t encryptIv[3];
+    uint32_t decryptIv[3];
+    uint32_t hmacNonce[8];
+};
+
+static void test_layout(void)
+{
+    printf("[test_layout]\n");
+    CHECK(sizeof(struct memdesc_mirror) == NV_MEMDESC_SIZE, "sizeof(NV_MEMORY_DESC_PARAMS) == 24");
+    CHECK(sizeof(struct chan_alloc_mirror) == NV_CHANNEL_ALLOC_PARAMS_SIZE,
+          "sizeof(NV_CHANNEL_ALLOC_PARAMS) == 360");
+    CHECK(offsetof(struct chan_alloc_mirror, gpFifoOffset) == NV_CHAN_GPFIFOOFFSET_OFF, "gpFifoOffset @8");
+    CHECK(offsetof(struct chan_alloc_mirror, gpFifoEntries) == NV_CHAN_GPFIFOENTRIES_OFF, "gpFifoEntries @16");
+    CHECK(offsetof(struct chan_alloc_mirror, flags) == NV_CHAN_FLAGS_OFF, "flags @20");
+    CHECK(offsetof(struct chan_alloc_mirror, hVASpace) == NV_CHAN_HVASPACE_OFF, "hVASpace @28");
+    CHECK(offsetof(struct chan_alloc_mirror, hUserdMemory) == NV_CHAN_HUSERDMEMORY_OFF, "hUserdMemory @32");
+    CHECK(offsetof(struct chan_alloc_mirror, userdOffset) == NV_CHAN_USERDOFFSET_OFF, "userdOffset @64");
+    CHECK(offsetof(struct chan_alloc_mirror, engineType) == NV_CHAN_ENGINETYPE_OFF, "engineType @128");
+    CHECK(offsetof(struct chan_alloc_mirror, instanceMem) == NV_CHAN_INSTANCEMEM_OFF, "instanceMem @144");
+    CHECK(offsetof(struct chan_alloc_mirror, userdMem) == NV_CHAN_USERDMEM_OFF, "userdMem @168");
+    CHECK(offsetof(struct chan_alloc_mirror, ramfcMem) == NV_CHAN_RAMFCMEM_OFF, "ramfcMem @192");
+    CHECK(offsetof(struct chan_alloc_mirror, mthdbufMem) == NV_CHAN_MTHDBUFMEM_OFF, "mthdbufMem @216");
+    CHECK(offsetof(struct chan_alloc_mirror, internalFlags) == NV_CHAN_INTERNALFLAGS_OFF, "internalFlags @244");
+    CHECK(offsetof(struct memdesc_mirror, addressSpace) == NV_MEMDESC_ADDRSPACE_OFF, "memdesc.addressSpace @16");
+    CHECK(offsetof(struct memdesc_mirror, cacheAttrib) == NV_MEMDESC_CACHEATTRIB_OFF, "memdesc.cacheAttrib @20");
+}
+
+static nv_gsp_chan_cfg mk_cfg(void)
+{
+    nv_gsp_chan_cfg c; memset(&c, 0, sizeof(c));
+    c.hClient = NV_GSP_RM_CLIENT_HANDLE;
+    c.hDevice = NV_GSP_RM_DEVICE_HANDLE;
+    c.hVASpace = NV_GSP_RM_VASPACE_HANDLE;
+    c.chid = 0;
+    c.engineType = 9;                 /* синтетический NV2080_ENGINE_TYPE_COPY0 */
+    c.gpfifo_va = 0x20000000ull;      /* GPU-VA кольца (из прямого GMMU) */
+    c.gpfifo_entries = 0x400;         /* 1024 записей */
+    c.inst_phys = 0x13300000ull; c.inst_size = 0x1000;
+    c.userd_phys = 0x13301000ull; c.userd_size = 0x1000;
+    c.ramfc_size = 0x200;
+    c.mthdbuf_phys = 0x13302000ull; c.mthdbuf_size = 0x5000; c.mthdbuf_sysmem = 0;
+    c.priv = 1;
+    return c;
+}
+
+static void test_channel_alloc(void)
+{
+    printf("[test_channel_alloc]\n");
+    nv_gsp_rpc_chan ch; chan_init(&ch);
+    uint8_t rep[NV_RM_ALLOC_HDR_SIZE]; memset(rep, 0, sizeof(rep));  /* status=0 */
+    put_msg(g_shm, &ch.lay, 0, NV_VGPU_MSG_FUNCTION_GSP_RM_ALLOC, 0, rep, sizeof(rep), 1);
+    set_msgq_wptr(g_shm, &ch.lay, 1);
+
+    nv_gsp_chan_cfg cfg = mk_cfg();
+    uint32_t hchan = 0, st = 0xffffffffu;
+    int rc = nv_gsp_rm_channel_alloc(&ch, &cfg, &hchan, &st);
+    CHECK(rc == NV_GSP_RM_OK, "channel_alloc OK");
+    CHECK(st == 0, "status == NV_OK");
+    CHECK(hchan == (NV_GSP_RM_CHANNEL_HANDLE | 0), "хэндл канала == 0xf1f00000|chid");
+
+    const uint8_t *ce = g_shm + ch.lay.cmdq_off + NV_GSP_QUEUE_ENTRYOFF + 0;
+    const uint8_t *al = ce + NV_GSP_RPC_PAYLOAD_OFF;   /* rpc_gsp_rm_alloc header */
+    const uint8_t *pp = al + NV_RM_ALLOC_HDR_SIZE;     /* NV_CHANNEL_ALLOC_PARAMS */
+    CHECK(ld32(al + NV_RM_ALLOC_HCLASS_OFF) == AMPERE_CHANNEL_GPFIFO_A, "hClass == AMPERE_CHANNEL_GPFIFO_A");
+    CHECK(ld32(al + NV_RM_ALLOC_HPARENT_OFF) == NV_GSP_RM_DEVICE_HANDLE, "hParent == device");
+    CHECK(ld32(al + NV_RM_ALLOC_PARAMSIZE_OFF) == NV_CHANNEL_ALLOC_PARAMS_SIZE, "paramsSize == 360");
+    CHECK(ld64(pp + NV_CHAN_GPFIFOOFFSET_OFF) == cfg.gpfifo_va, "gpFifoOffset == GPU-VA");
+    CHECK(ld32(pp + NV_CHAN_GPFIFOENTRIES_OFF) == cfg.gpfifo_entries, "gpFifoEntries");
+    CHECK(ld32(pp + NV_CHAN_HVASPACE_OFF) == NV_GSP_RM_VASPACE_HANDLE, "hVASpace == vaspace");
+    CHECK(ld32(pp + NV_CHAN_ENGINETYPE_OFF) == cfg.engineType, "engineType");
+    /* flags: priv(bit5) + page_fixed(bit21); chid=0 → индексы 0 */
+    CHECK(ld32(pp + NV_CHAN_FLAGS_OFF) == (NVOS04_FLAGS_PRIVILEGED_CHANNEL_BIT
+          | NVOS04_FLAGS_USERD_INDEX_PAGE_FIXED_BIT), "flags == PRIV|PAGE_FIXED (0x200020)");
+    /* instanceMem: base=inst_phys, addressSpace=VIDMEM(2) */
+    CHECK(ld64(pp + NV_CHAN_INSTANCEMEM_OFF + NV_MEMDESC_BASE_OFF) == cfg.inst_phys, "instanceMem.base");
+    CHECK(ld32(pp + NV_CHAN_INSTANCEMEM_OFF + NV_MEMDESC_ADDRSPACE_OFF) == NV_MEMDESC_ADDRSPACE_VIDMEM,
+          "instanceMem.addressSpace == VIDMEM");
+    CHECK(ld64(pp + NV_CHAN_USERDMEM_OFF + NV_MEMDESC_BASE_OFF) == cfg.userd_phys, "userdMem.base");
+    CHECK(ld64(pp + NV_CHAN_RAMFCMEM_OFF + NV_MEMDESC_BASE_OFF) == cfg.inst_phys, "ramfcMem.base == inst_phys");
+    CHECK(ld64(pp + NV_CHAN_RAMFCMEM_OFF + NV_MEMDESC_SIZE_OFF) == 0x200, "ramfcMem.size == 0x200");
+    CHECK(ld32(pp + NV_CHAN_MTHDBUFMEM_OFF + NV_MEMDESC_ADDRSPACE_OFF) == NV_MEMDESC_ADDRSPACE_VIDMEM,
+          "mthdbufMem.addressSpace == VIDMEM (sysmem=0)");
+}
+
+static void test_bind_schedule(void)
+{
+    printf("[test_bind_schedule]\n");
+    nv_gsp_rpc_chan ch; chan_init(&ch);
+    /* два ответа RM_CONTROL подряд (bind, schedule) */
+    uint8_t rep[NV_RM_CTRL_HDR_SIZE + 8]; memset(rep, 0, sizeof(rep));
+    put_msg(g_shm, &ch.lay, 0, NV_VGPU_MSG_FUNCTION_GSP_RM_CONTROL, 0, rep, sizeof(rep), 1);
+    put_msg(g_shm, &ch.lay, 1, NV_VGPU_MSG_FUNCTION_GSP_RM_CONTROL, 0, rep, sizeof(rep), 1);
+    set_msgq_wptr(g_shm, &ch.lay, 2);
+
+    uint32_t hchan = NV_GSP_RM_CHANNEL_HANDLE | 0;
+    uint32_t st = 0xffffffffu;
+    int rc = nv_gsp_rm_channel_bind(&ch, NV_GSP_RM_CLIENT_HANDLE, hchan, 9, &st);
+    CHECK(rc == NV_GSP_RM_OK && st == 0, "channel_bind OK");
+    const uint8_t *cp0 = g_shm + ch.lay.cmdq_off + NV_GSP_QUEUE_ENTRYOFF + 0 + NV_GSP_RPC_PAYLOAD_OFF;
+    CHECK(ld32(cp0 + NV_RM_CTRL_CMD_OFF) == NVA06F_CTRL_CMD_BIND, "cmd == BIND (0xa06f0104)");
+    CHECK(ld32(cp0 + NV_RM_CTRL_HOBJECT_OFF) == hchan, "hObject == канал");
+    CHECK(ld32(cp0 + NV_RM_CTRL_HDR_SIZE + 0) == 9, "BIND.engineType == 9");
+
+    st = 0xffffffffu;
+    rc = nv_gsp_rm_channel_schedule(&ch, NV_GSP_RM_CLIENT_HANDLE, hchan, 1, &st);
+    CHECK(rc == NV_GSP_RM_OK && st == 0, "channel_schedule OK");
+    const uint8_t *cp1 = g_shm + ch.lay.cmdq_off + NV_GSP_QUEUE_ENTRYOFF
+                       + (size_t)1 * NV_GSP_QUEUE_MSGSIZE + NV_GSP_RPC_PAYLOAD_OFF;
+    CHECK(ld32(cp1 + NV_RM_CTRL_CMD_OFF) == NVA06F_CTRL_CMD_GPFIFO_SCHEDULE, "cmd == GPFIFO_SCHEDULE (0xa06f0103)");
+    CHECK((cp1 + NV_RM_CTRL_HDR_SIZE)[0] == 1, "SCHEDULE.bEnable == 1");
+}
+
+int main(void)
+{
+    test_layout();
+    test_channel_alloc();
+    test_bind_schedule();
+    printf(failed ? "\n=== gsp_fifo_test: ЕСТЬ ПРОВАЛЫ ===\n" : "\n=== gsp_fifo_test: ВСЕ ТЕСТЫ ПРОШЛИ ===\n");
+    return failed ? 1 : 0;
+}

@@ -77,6 +77,23 @@
 | `driver/gsp/booter.*` | nova `firmware/booter.rs` | загрузка Booter → GSP-RM в WPR2, старт RISC-V |
 | `driver/gsp/rpc.*` | OGK `message_queue_priv.h`, nouveau `r535.c` | command/status очереди в sysmem, формат RPC, первый handshake |
 
+## Слой 4 — каналы GPFIFO (framing) — 🔧 офлайн 2026-07-15
+
+`driver/gsp/gsp_fifo.{c,h}` (порт nouveau `fifo/r535.c`), офлайн-тест
+`tools/gsp_fifo_test.c`. Тех-запись: `docs/gsp-layer4-fifo.md`.
+
+| Наш код | Upstream | Что взято | Статус |
+|---|---|---|---|
+| классы канала/движка | nouveau `nvif/class.h` + `fifo/ga102.c` | `AMPERE_CHANNEL_GPFIFO_A`=0xC56F, `KEPLER_CHANNEL_GROUP_A`=0xA06C, `AMPERE_USERMODE_A`=0xC561, `AMPERE_DMA_COPY_B`=0xC7B5, `ADA_A`=0xC997, `ADA_COMPUTE_A`=0xC9C0 | 📄 сверено |
+| `nv_gsp_rm_channel_alloc` | `r535_chan_ramfc_write` + `alloc/alloc_channel.h` | `NV_CHANNEL_ALLOC_PARAMS` (360б, compile-probe): gpFifoOffset@8/entries@16/flags@20/hVASpace@28/engineType@128 + instance/userd/ramfc/mthdbuf `NV_MEMORY_DESC_PARAMS`(24б, as=VIDMEM 2); flags PRIV(bit5)\|PAGE_FIXED(bit21) | 🔧 офлайн-framing |
+| `nv_gsp_rm_channel_bind` | `ctrla06fgpfifo.h` `NVA06F_CTRL_CMD_BIND` | RM_CONTROL cmd=0xa06f0104, {engineType} | 🔧 офлайн |
+| `nv_gsp_rm_channel_schedule` | `ctrla06fgpfifo.h` `NVA06F_CTRL_CMD_GPFIFO_SCHEDULE` | RM_CONTROL cmd=0xa06f0103, {bEnable,bSkipSubmit} | 🔧 офлайн |
+| `nv_gsp_rm_engine_obj_alloc` | `r535` (объект движка на канале) | GSP_RM_ALLOC hParent=канал, класс CE/GR | 🔧 офлайн |
+
+`engineType` (NV2080_ENGINE_TYPE_*) на HW берётся из `FIFO_GET_DEVICE_INFO_TABLE`
+(как `r535_fifo_runl_ctor`) — подшаг A0. HW-проходы: A (канал+bind+schedule),
+B (объект движка), C (pushbuffer+семафор).
+
 ## Конкретные upstream-ссылки (raw, ветка master ядра)
 
 - nova vbios:   `drivers/gpu/nova-core/vbios.rs`

@@ -159,7 +159,12 @@ docs/                   архитектура, роадмап, конспект
 - Спека: `.kiro/specs/rtx-tahoe-full-support/` (requirements/design/tasks).
 - Прогон без ребута/монитора: `tools/run-gsp-boot-detached.sh` (весь слой 2 + слой 3
   проходы A/B/C/D), `tools/run-fwsec-detached.sh` (только FWSEC). Linux/VFIO, возвращают GUI.
-- Дальше: **слой 4** (каналы: FIFO/GR RM-control'ы). Слой 3 закрыт полностью (A+B+C+D).
+- Слой 4 (каналы): 🔧 **framing + офлайн-тест 2026-07-15**. `driver/gsp/gsp_fifo.{c,h}`
+  (`nv_gsp_rm_channel_alloc`/`bind`/`schedule`/`engine_obj_alloc`), класс
+  `AMPERE_CHANNEL_GPFIFO_A (0xC56F)`, params `NV_CHANNEL_ALLOC_PARAMS` (360б, compile-probe),
+  контролы `NVA06F_CTRL_CMD_BIND/GPFIFO_SCHEDULE`. Порт nouveau `r535_chan_ramfc_write`.
+  Тех-запись: **`docs/gsp-layer4-fifo.md`**. Дальше HW: device-info (engineType) →
+  буферы во VRAM + GPFIFO в GPU-VA (прямой GMMU) → alloc+bind+schedule на железе.
 
 ## Ключевые источники (референс-база)
 

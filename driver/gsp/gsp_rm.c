@@ -136,10 +136,11 @@ int nv_gsp_rm_alloc(nv_gsp_rpc_chan *ch, uint32_t hClient, uint32_t hParent,
 {
     if (!ch) return NV_GSP_RM_ERR_ARG;
 
-    /* req = rpc_gsp_rm_alloc_v03_00 (шапка 32б) + params. */
-    static uint8_t req[NV_RM_ALLOC_HDR_SIZE + 256u];
-    static uint8_t rep[NV_RM_ALLOC_HDR_SIZE + 256u];
-    if (params_len > 256u) return NV_GSP_RM_ERR_BOUNDS;
+    /* req = rpc_gsp_rm_alloc_v03_00 (шапка 32б) + params. Ёмкость 512 покрывает
+       крупные alloc-params (NV_CHANNEL_ALLOC_PARAMS=360, слой 4). */
+    static uint8_t req[NV_RM_ALLOC_HDR_SIZE + 512u];
+    static uint8_t rep[NV_RM_ALLOC_HDR_SIZE + 512u];
+    if (params_len > 512u) return NV_GSP_RM_ERR_BOUNDS;
     uint32_t req_len = NV_RM_ALLOC_HDR_SIZE + params_len;
     for (uint32_t i = 0; i < req_len; i++) req[i] = 0;
     st32(req + NV_RM_ALLOC_HCLIENT_OFF,   hClient);
