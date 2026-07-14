@@ -1,8 +1,9 @@
 # Слой 5 — дисплей / modeset через GSP-RM
 
-**Статус:** 🟢 **5A+5B+5C.1 НА ЖЕЛЕЗЕ 2026-07-14** (RTX 4070S, Linux/VFIO). 5C.1:
-RAMIN дисплея (`WRITE_INST_MEM`) + display root `AD102_DISP` (0xc7700000), оба `NV_OK`.
-Пруф C.1: `docs/hw-dumps/20260714-rtx4070s-layer5-C1-disproot-OK.log`. Ниже: 5A —
+**Статус:** 🟢 **5A+5B+5C.1+5C.2 НА ЖЕЛЕЗЕ 2026-07-14** (RTX 4070S, Linux/VFIO). 5C.1:
+RAMIN + display root `AD102_DISP` (0xc7700000). 5C.2: display-pushbuffer + core channel
+`AD102_DISP_CORE_CHANNEL_DMA` (0xc77d0000), всё `NV_OK`. Пруфы:
+`docs/hw-dumps/20260714-rtx4070s-layer5-C{1-disproot,2-corechan}-OK.log`. Ниже: 5A —
 `NV04_DISPLAY_COMMON`, `heads=4`, `displayMask=0x7f00` (7 выходов); 5B — перечислены
 типы/протоколы всех 7 OR (SOR TMDS/DP), **два монитора обнаружены** (`connected=0x300`),
 **EDID прочитан по DDC** (magic `00ffffffffffff00`, 384 байта). Эталон — nouveau
@@ -48,7 +49,9 @@ RAMIN дисплея (`WRITE_INST_MEM`) + display root `AD102_DISP` (0xc7700000)
   subdevice GSP (`hInternalClient/Subdevice` из GET_STATIC_INFO: 0xc2000005/0xabcd2080)
   → `GSP_RM_ALLOC` display root **`AD102_DISP (0xC770)`** под device (hObject=class<<16,
   params 0). Метрика: WRITE_INST_MEM + root alloc = NV_OK.
-- **5C.2** (🔧 framing): core channel `AD102_DISP_CORE_CHANNEL_DMA (0xC77D)` под display
+- **5C.2** (🟢 HW 2026-07-14: `DISPLAY_CHANNEL_PUSHBUFFER` + `CORE_CHANNEL_DMA`
+  handle=0xc77d0000, оба `NV_OK`; пруф `docs/hw-dumps/20260714-rtx4070s-layer5-C2-corechan-OK.log`):
+  core channel `AD102_DISP_CORE_CHANNEL_DMA (0xC77D)` под display
   root: пушбуфер во VRAM (≤4К) → `INTERNAL_DISPLAY_CHANNEL_PUSHBUFFER (0x20800a58)` на
   внутр. subdevice GSP → `GSP_RM_ALLOC` core channel (params
   `NV50VAIO_CHANNELDMA_ALLOCATION_PARAMETERS` 32б: channelInstance=0, offset=0).

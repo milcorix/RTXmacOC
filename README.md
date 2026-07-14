@@ -47,7 +47,7 @@ GPU-виртуальное адресное пространство (корен
 | 2 | **GSP bring-up** — поднять GPU через GSP, наладить RPC | 🟢 **ЗАВЕРШЁН на железе** (Linux/VFIO): FWSEC-FRTS→WPR2→Booter→GSP RISC-V active → **`GSP_INIT_DONE` по RPC** |
 | 3 | **Memory management (GMMU/VRAM)** через RPC | 🟢 **A+B+C+D на железе**: RPC/RM-цепочка; FB-control + VASPACE; VRAM memlist; **D — прямой GMMU** (page-tables во VRAM + `COPY_SERVER_RESERVED_PDES`, `status=NV_OK`). RPC `MAP_MEMORY_DMA` — тупик (vGPU-путь) |
 | 4 | Command submission (каналы) | 🟢 **ЗАМКНУТ на железе**: канал `AMPERE_CHANNEL_GPFIFO_A` (A) + объект CE `AMPERE_DMA_COPY_B` (B) + **pushbuffer исполнен, host-семафор `0xcafe0001` (C) — первая команда GPU**. Весь путь submission работает |
-| 5 | **Display / modeset** — вывод изображения | 🟢 **5A+5B+5C.1 на железе**: движок перечислён (heads=4, 7 выходов), **2 монитора + EDID по DDC**, **display root `AD102_DISP` создан**. Аппаратный modeset-трек (Linux/VFIO) идёт (дальше каналы+scanout); ⛔ интеграция в macOS WindowServer — отдельный трек, замок Apple |
+| 5 | **Display / modeset** — вывод изображения | 🟢 **5A+5B+5C.1+5C.2 на железе**: движок перечислён (heads=4, 7 выходов), **2 монитора + EDID по DDC**, **display root + core channel созданы**. Аппаратный modeset-трек (Linux/VFIO) идёт (дальше SOR/link-training + scanout); ⛔ интеграция в macOS WindowServer — отдельный трек, замок Apple |
 | 6 | 3D / compute (Metal) | ⛔ закрытый интерфейс |
 
 ### Подробнее по слоям

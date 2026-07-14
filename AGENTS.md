@@ -193,11 +193,15 @@ docs/                   архитектура, роадмап, конспект
   `nv_gsp_disp_write_inst_mem` (RAMIN дисплея через `WRITE_INST_MEM 0x20800a49` на
   внутр. subdevice GSP) + `nv_gsp_disp_root_alloc` (`AD102_DISP 0xC770` → handle
   0xc7700000), оба `NV_OK`. Пруф:
-  `docs/hw-dumps/20260714-rtx4070s-layer5-C1-disproot-OK.log`. Тех-запись:
+  `docs/hw-dumps/20260714-rtx4070s-layer5-C1-disproot-OK.log`. **5C.2 🟢 HW**:
+  `nv_gsp_disp_channel_pushbuffer` (`DISPLAY_CHANNEL_PUSHBUFFER 0x20800a58` на внутр.
+  subdevice) + `nv_gsp_disp_core_channel_alloc` (`AD102_DISP_CORE_CHANNEL_DMA 0xC77D` →
+  handle 0xc77d0000, params `NV50VAIO_CHANNELDMA_ALLOCATION_PARAMETERS` 32б), оба `NV_OK`.
+  Пруф: `docs/hw-dumps/20260714-rtx4070s-layer5-C2-corechan-OK.log`. Тех-запись:
   **`docs/gsp-layer5-display.md`**. Это **аппаратный modeset-трек** (Linux/VFIO), от
-  macOS не зависит. Дальше: 5C.2 (каналы core/wndw/curs), 5C.3 (SOR/link training),
-  5C.4 (framebuffer+methods=картинка). Интеграция в macOS WindowServer — ОТДЕЛЬНЫЙ
-  трек, замок Apple (открытый вопрос №1, гейт R10).
+  macOS не зависит. Дальше: 5C.3 (SOR acquire + link training), 5C.4 (framebuffer +
+  методы core/window = картинка). Интеграция в macOS WindowServer — ОТДЕЛЬНЫЙ трек,
+  замок Apple (открытый вопрос №1, гейт R10).
 
 ## Ключевые источники (референс-база)
 

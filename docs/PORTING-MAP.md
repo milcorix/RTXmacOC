@@ -103,7 +103,7 @@ doorbell (`AMPERE_USERMODE_A 0xC561`) → host-семафор `0xcafe0001`, read
 Первая команда GPU исполнена; слой 4 замкнут. Пруф:
 `docs/hw-dumps/20260714-rtx4070s-layer4-passC-exec-OK.log`.
 
-## Слой 5 — дисплей (энумерация + EDID + display root) — 🟢 5A+5B+5C.1 НА ЖЕЛЕЗЕ 2026-07-14
+## Слой 5 — дисплей (enum + EDID + display root + core channel) — 🟢 5A+5B+5C.1+5C.2 НА ЖЕЛЕЗЕ 2026-07-14
 
 `driver/gsp/gsp_disp.{c,h}` (порт nouveau `disp/r535.c`), офлайн-тест
 `tools/gsp_disp_test.c`. Тех-запись: `docs/gsp-layer5-display.md`. Пруф:
@@ -119,10 +119,11 @@ doorbell (`AMPERE_USERMODE_A 0xC561`) → host-семафор `0xcafe0001`, read
 | `nv_gsp_disp_get_edid` | `ctrl0073specific.h` `GET_EDID_V2` + `r535_tmds_edid_get` | cmd=0x730245 (2064б): displayId@4 bufferSize@8 flags@12 edidBuffer[2048]@16 | 🟢 HW (size=384, magic ok) |
 | `nv_gsp_disp_write_inst_mem` | `ctrl2080internal.h` `WRITE_INST_MEM` + `r535_disp_oneinit` | cmd=0x20800a49 (24б): physAddr@0 size@8 addrSpace@16(FBMEM=2) cacheAttr@20(WC=2); на внутр. subdevice GSP | 🟢 HW (status=NV_OK) |
 | `nv_gsp_disp_root_alloc` | `r535_disp_init` + `nvif/class.h` | `AD102_DISP`=0xC770, hObject=class<<16=0xc7700000, paramsSize=0 | 🟢 HW (display root) |
+| `nv_gsp_disp_channel_pushbuffer` | `ctrl2080internal.h` `DISPLAY_CHANNEL_PUSHBUFFER` + `r535_chan_push` | cmd=0x20800a58 (40б): addressSpace@0 physicalAddr@8 limit@16 cacheSnoop@24 hclass@28 channelInstance@32 valid@36; на внутр. subdevice | 🟢 HW (status=NV_OK) |
+| `nv_gsp_disp_core_channel_alloc` | `r535_dmac_init` + `nvos.h`/`nvif/class.h` | `AD102_DISP_CORE_CHANNEL_DMA`=0xC77D, hObject=class<<16=0xc77d0000 под display root, params `NV50VAIO_CHANNELDMA_ALLOCATION_PARAMETERS` (32б: channelInstance@0, offset@12) | 🟢 HW (core channel) |
 
-Дальше: 5C.2 (core/wndw/curs каналы `NVC77D/E/B/A` + display-pushbuffer +
-`NV50VAIO_CHANNEL*_ALLOCATION_PARAMETERS`), 5C.3 (`DFP_ASSIGN_SOR` + DP `DP_CTRL`/HDMI
-`SET_HDMI_ENABLE`), 5C.4 (framebuffer + методы core/window = modeset/scanout).
+Дальше: 5C.3 (`DFP_ASSIGN_SOR` + DP `DP_CTRL`/HDMI `SET_HDMI_ENABLE`), 5C.4
+(framebuffer + методы core/window channel = modeset/scanout = картинка).
 
 ## Конкретные upstream-ссылки (raw, ветка master ядра)
 
