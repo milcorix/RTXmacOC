@@ -189,10 +189,15 @@ docs/                   архитектура, роадмап, конспект
   (`OR_GET_INFO 0x73028b`) — 7 OR (SOR TMDS/DP); `nv_gsp_disp_get_connect_state`
   (`CONNECT_STATE 0x730122`) — **2 монитора** (`connected=0x300`); `nv_gsp_disp_get_edid`
   (`GET_EDID_V2 0x730245`) — **EDID по DDC** (magic `00ffffffffffff00`, 384б). Пруфы:
-  `docs/hw-dumps/20260714-rtx4070s-layer5-{A0-disp,B-edid}-OK.log`. Тех-запись:
+  `docs/hw-dumps/20260714-rtx4070s-layer5-{A0-disp,B-edid}-OK.log`. **5C.1 🟢 HW**:
+  `nv_gsp_disp_write_inst_mem` (RAMIN дисплея через `WRITE_INST_MEM 0x20800a49` на
+  внутр. subdevice GSP) + `nv_gsp_disp_root_alloc` (`AD102_DISP 0xC770` → handle
+  0xc7700000), оба `NV_OK`. Пруф:
+  `docs/hw-dumps/20260714-rtx4070s-layer5-C1-disproot-OK.log`. Тех-запись:
   **`docs/gsp-layer5-display.md`**. Это **аппаратный modeset-трек** (Linux/VFIO), от
-  macOS не зависит. Дальше: 5C (modeset+scanout=картинка). Интеграция в macOS
-  WindowServer — ОТДЕЛЬНЫЙ трек, замок Apple (открытый вопрос №1, гейт R10).
+  macOS не зависит. Дальше: 5C.2 (каналы core/wndw/curs), 5C.3 (SOR/link training),
+  5C.4 (framebuffer+methods=картинка). Интеграция в macOS WindowServer — ОТДЕЛЬНЫЙ
+  трек, замок Apple (открытый вопрос №1, гейт R10).
 
 ## Ключевые источники (референс-база)
 

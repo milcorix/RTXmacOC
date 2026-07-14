@@ -1,6 +1,8 @@
 # Слой 5 — дисплей / modeset через GSP-RM
 
-**Статус:** 🟢 **5A+5B НА ЖЕЛЕЗЕ 2026-07-14** (RTX 4070S, Linux/VFIO): 5A —
+**Статус:** 🟢 **5A+5B+5C.1 НА ЖЕЛЕЗЕ 2026-07-14** (RTX 4070S, Linux/VFIO). 5C.1:
+RAMIN дисплея (`WRITE_INST_MEM`) + display root `AD102_DISP` (0xc7700000), оба `NV_OK`.
+Пруф C.1: `docs/hw-dumps/20260714-rtx4070s-layer5-C1-disproot-OK.log`. Ниже: 5A —
 `NV04_DISPLAY_COMMON`, `heads=4`, `displayMask=0x7f00` (7 выходов); 5B — перечислены
 типы/протоколы всех 7 OR (SOR TMDS/DP), **два монитора обнаружены** (`connected=0x300`),
 **EDID прочитан по DDC** (magic `00ffffffffffff00`, 384 байта). Эталон — nouveau
@@ -99,10 +101,12 @@ TMDS_A/B, DP_A/B (idx=~0 — назначается при acquire). `CONNECT_ST
 (два монитора: 0x100 TMDS_A + 0x200 DP_B). `GET_EDID_V2` для обоих → `size=384`, magic
 `00ffffffffffff00` (валидный EDID по DDC). Карта под нашим драйвером **видит мониторы и
 читает их EDID**. Пруф: `docs/hw-dumps/20260714-rtx4070s-layer5-B-edid-OK.log`.
-**5C.1 🔧 framing 2026-07-15:** `nv_gsp_disp_write_inst_mem` (RAMIN дисплея через
-WRITE_INST_MEM на внутр. subdevice GSP) + `nv_gsp_disp_root_alloc` (`AD102_DISP<<16`).
-Оркестратор: обнуляет 64 КиБ VRAM (PRAMIN) → WRITE_INST_MEM → root alloc. HW-прогон впереди.
-**Дальше:** 5C.2 (каналы дисплея), 5C.3 (SOR/link training), 5C.4 (framebuffer+methods=картинка).
+**5C.1 🟢 HW 2026-07-14:** `WRITE_INST_MEM` (RAMIN дисплея 0x13400000, 64К, на внутр.
+subdevice GSP `0xabcd2080`/client `0xc2000005`) `status=NV_OK`; `AD102_DISP` root alloc
+`status=NV_OK`, handle `0xc7700000`. **Дисплейный движок активирован, display root есть.**
+Пруф: `docs/hw-dumps/20260714-rtx4070s-layer5-C1-disproot-OK.log`.
+**Дальше:** 5C.2 (каналы дисплея core/wndw/curs), 5C.3 (SOR/link training), 5C.4
+(framebuffer+methods=картинка).
 
 ---
 
