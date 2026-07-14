@@ -222,6 +222,49 @@ static void test_disp_root_alloc(void)
     CHECK(ld32(al + NV_RM_ALLOC_PARAMSIZE_OFF) == 0, "paramsSize == 0");
 }
 
+static void test_channel_pushbuffer(void)
+{
+    printf("[test_channel_pushbuffer]\n");
+    nv_gsp_rpc_chan ch; chan_init(&ch);
+    uint8_t rep[NV_RM_CTRL_HDR_SIZE + NV_DISP_PB_PARAMS_SIZE]; memset(rep, 0, sizeof(rep));
+    put_msg(g_shm, &ch.lay, 0, NV_VGPU_MSG_FUNCTION_GSP_RM_CONTROL, 0, rep, sizeof(rep), 1);
+    set_msgq_wptr(g_shm, &ch.lay, 1);
+
+    uint32_t st = 0xffffffffu;
+    int rc = nv_gsp_disp_channel_pushbuffer(&ch, 0xc2000005u, 0xabcd2080u,
+                                            AD102_DISP_CORE_CHANNEL_DMA, 0,
+                                            0x13410000ull, NV_DISP_PB_SIZE - 1, &st);
+    CHECK(rc == NV_GSP_RM_OK && st == 0, "channel_pushbuffer OK");
+    const uint8_t *cp = g_shm + ch.lay.cmdq_off + NV_GSP_QUEUE_ENTRYOFF + 0 + NV_GSP_RPC_PAYLOAD_OFF;
+    CHECK(ld32(cp + NV_RM_CTRL_CMD_OFF) == NV2080_CTRL_CMD_INTERNAL_DISPLAY_CHANNEL_PUSHBUFFER, "cmd == CHANNEL_PUSHBUFFER");
+    CHECK(ld32(cp + NV_RM_CTRL_HOBJECT_OFF) == 0xabcd2080u, "hObject == internal subdevice");
+    const uint8_t *pp = cp + NV_RM_CTRL_HDR_SIZE;
+    CHECK(ld32(pp + NV_DISP_PB_ADDRSPACE_OFF) == NV_RM_ADDR_FBMEM, "addressSpace == FBMEM");
+    CHECK(ld64(pp + NV_DISP_PB_PHYS_OFF) == 0x13410000ull, "physicalAddr");
+    CHECK(ld64(pp + NV_DISP_PB_LIMIT_OFF) == NV_DISP_PB_SIZE - 1, "limit == 0xfff");
+    CHECK(ld32(pp + NV_DISP_PB_HCLASS_OFF) == AD102_DISP_CORE_CHANNEL_DMA, "hclass == CORE_CHANNEL");
+    CHECK(pp[NV_DISP_PB_VALID_OFF] == 1, "valid == 1");
+}
+
+static void test_core_channel_alloc(void)
+{
+    printf("[test_core_channel_alloc]\n");
+    nv_gsp_rpc_chan ch; chan_init(&ch);
+    uint8_t rep[NV_RM_ALLOC_HDR_SIZE]; memset(rep, 0, sizeof(rep));
+    put_msg(g_shm, &ch.lay, 0, NV_VGPU_MSG_FUNCTION_GSP_RM_ALLOC, 0, rep, sizeof(rep), 1);
+    set_msgq_wptr(g_shm, &ch.lay, 1);
+
+    uint32_t hcore = 0, st = 0xffffffffu;
+    int rc = nv_gsp_disp_core_channel_alloc(&ch, NV_GSP_RM_CLIENT_HANDLE, NV_GSP_RM_DISPROOT_HANDLE,
+                                            AD102_DISP_CORE_CHANNEL_DMA, 0, &hcore, &st);
+    CHECK(rc == NV_GSP_RM_OK && st == 0, "core_channel_alloc OK");
+    CHECK(hcore == NV_GSP_RM_DISPCORE_HANDLE, "хэндл == 0xc77d0000");
+    const uint8_t *al = g_shm + ch.lay.cmdq_off + NV_GSP_QUEUE_ENTRYOFF + 0 + NV_GSP_RPC_PAYLOAD_OFF;
+    CHECK(ld32(al + NV_RM_ALLOC_HCLASS_OFF) == AD102_DISP_CORE_CHANNEL_DMA, "hClass == CORE_CHANNEL");
+    CHECK(ld32(al + NV_RM_ALLOC_HPARENT_OFF) == NV_GSP_RM_DISPROOT_HANDLE, "hParent == display root");
+    CHECK(ld32(al + NV_RM_ALLOC_PARAMSIZE_OFF) == NV50VAIO_CHANDMA_PARAMS_SIZE, "paramsSize == 32");
+}
+
 int main(void)
 {
     test_disp_common_alloc();
@@ -232,6 +275,8 @@ int main(void)
     test_edid();
     test_write_inst_mem();
     test_disp_root_alloc();
+    test_channel_pushbuffer();
+    test_core_channel_alloc();
     printf(failed ? "\n=== gsp_disp_test: ЕСТЬ ПРОВАЛЫ ===\n" : "\n=== gsp_disp_test: ВСЕ ТЕСТЫ ПРОШЛИ ===\n");
     return failed ? 1 : 0;
 }

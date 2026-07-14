@@ -48,9 +48,12 @@ RAMIN дисплея (`WRITE_INST_MEM`) + display root `AD102_DISP` (0xc7700000)
   subdevice GSP (`hInternalClient/Subdevice` из GET_STATIC_INFO: 0xc2000005/0xabcd2080)
   → `GSP_RM_ALLOC` display root **`AD102_DISP (0xC770)`** под device (hObject=class<<16,
   params 0). Метрика: WRITE_INST_MEM + root alloc = NV_OK.
-- **5C.2**: core/window/cursor каналы дисплея (классы `*7d/*7e/*7b/*7a` → для Ada
-  `NVC77D/C77E/C77B/C77A`), display-pushbuffer (`INTERNAL_DISPLAY_CHANNEL_PUSHBUFFER`),
-  `NV50VAIO_CHANNELDMA/PIO_ALLOCATION_PARAMETERS`.
+- **5C.2** (🔧 framing): core channel `AD102_DISP_CORE_CHANNEL_DMA (0xC77D)` под display
+  root: пушбуфер во VRAM (≤4К) → `INTERNAL_DISPLAY_CHANNEL_PUSHBUFFER (0x20800a58)` на
+  внутр. subdevice GSP → `GSP_RM_ALLOC` core channel (params
+  `NV50VAIO_CHANNELDMA_ALLOCATION_PARAMETERS` 32б: channelInstance=0, offset=0).
+  hObject=(class<<16)|inst=0xc77d0000. Window `GA102_DISP_WINDOW_CHANNEL_DMA (0xC67E)`,
+  cursor `GA102_DISP_CURSOR (0xC67A)` — для surface scanout (5C.4).
 - **5C.3**: SOR acquire (`NV0073_CTRL_CMD_DFP_ASSIGN_SOR`) + для DP link training
   (`NV0073_CTRL_CMD_DP_CTRL`), для HDMI `SPECIFIC_SET_HDMI_ENABLE`.
 - **5C.4**: framebuffer-surface во VRAM (наш GMMU) + методы core/window channel

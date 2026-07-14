@@ -838,6 +838,28 @@ static int run(const nv_mmio_t *io, struct arena *ar, const char *bdf)
                     printf("СЛОЙ 5 C.1: AD102_DISP root rc=%d status=0x%x handle=0x%08x%s\n",
                            rrc, rst, hroot,
                            (rrc==NV_GSP_RM_OK && rst==0) ? "  ★ DISPLAY ROOT ★" : "  (не OK)");
+
+                    /* --- СЛОЙ 5 C.2: core-channel дисплея ---
+                       Пушбуфер во VRAM (обнулить, ≤4К) → DISPLAY_CHANNEL_PUSHBUFFER на
+                       внутр. subdevice GSP → alloc AD102_DISP_CORE_CHANNEL_DMA под root.
+                       Порт r535_chan_push + r535_dmac_init. */
+                    if (rrc == NV_GSP_RM_OK && rst == 0) {
+                        uint64_t core_pb = 0x13410000ull;   /* пушбуфер core-channel во VRAM */
+                        nv_pramin_fill(io, &win, core_pb, NV_DISP_PB_SIZE, 0u);
+                        uint32_t pst = 0xffffffffu;
+                        int prc = nv_gsp_disp_channel_pushbuffer(&ch, si.h_client, si.h_subdevice,
+                                                                 AD102_DISP_CORE_CHANNEL_DMA, 0,
+                                                                 core_pb, NV_DISP_PB_SIZE - 1, &pst);
+                        printf("СЛОЙ 5 C.2: DISPLAY_CHANNEL_PUSHBUFFER rc=%d status=0x%x pb=0x%llx\n",
+                               prc, pst, (unsigned long long)core_pb);
+                        uint32_t hcore = 0, cst = 0xffffffffu;
+                        int crc = nv_gsp_disp_core_channel_alloc(&ch, hcli, hroot,
+                                                                 AD102_DISP_CORE_CHANNEL_DMA, 0,
+                                                                 &hcore, &cst);
+                        printf("СЛОЙ 5 C.2: CORE_CHANNEL_DMA rc=%d status=0x%x handle=0x%08x%s\n",
+                               crc, cst, hcore,
+                               (crc==NV_GSP_RM_OK && cst==0) ? "  ★ CORE CHANNEL ★" : "  (не OK)");
+                    }
                 }
             }
         }

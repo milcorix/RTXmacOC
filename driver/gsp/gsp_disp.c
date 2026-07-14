@@ -148,3 +148,38 @@ int nv_gsp_disp_root_alloc(nv_gsp_rpc_chan *ch, uint32_t hClient, uint32_t hDevi
     if (rc == NV_GSP_RM_OK && out_root) *out_root = h;
     return rc;
 }
+
+int nv_gsp_disp_channel_pushbuffer(nv_gsp_rpc_chan *ch, uint32_t hIntClient,
+                                   uint32_t hIntSubdevice, uint32_t hclass,
+                                   uint32_t channelInstance, uint64_t pb_phys,
+                                   uint64_t pb_limit, uint32_t *status)
+{
+    if (!ch) return NV_GSP_RM_ERR_ARG;
+    uint8_t p[NV_DISP_PB_PARAMS_SIZE];
+    for (unsigned i = 0; i < sizeof(p); i++) p[i] = 0;
+    st32(p + NV_DISP_PB_ADDRSPACE_OFF, NV_RM_ADDR_FBMEM);   /* пушбуфер во VRAM */
+    st64(p + NV_DISP_PB_PHYS_OFF,      pb_phys);
+    st64(p + NV_DISP_PB_LIMIT_OFF,     pb_limit);
+    st32(p + NV_DISP_PB_CACHESNOOP_OFF, 0u);
+    st32(p + NV_DISP_PB_HCLASS_OFF,    hclass);
+    st32(p + NV_DISP_PB_CHANINST_OFF,  channelInstance);
+    p[NV_DISP_PB_VALID_OFF] = 1u;                           /* valid=1 (не PIO) */
+    return nv_gsp_rm_control(ch, hIntClient, hIntSubdevice,
+                             NV2080_CTRL_CMD_INTERNAL_DISPLAY_CHANNEL_PUSHBUFFER,
+                             p, sizeof(p), status);
+}
+
+int nv_gsp_disp_core_channel_alloc(nv_gsp_rpc_chan *ch, uint32_t hClient, uint32_t hDispRoot,
+                                   uint32_t coreClass, uint32_t channelInstance,
+                                   uint32_t *out_chan, uint32_t *status)
+{
+    if (!ch) return NV_GSP_RM_ERR_ARG;
+    uint32_t h = (coreClass << 16) | channelInstance;
+    uint8_t p[NV50VAIO_CHANDMA_PARAMS_SIZE];
+    for (unsigned i = 0; i < sizeof(p); i++) p[i] = 0;
+    st32(p + NV50VAIO_CHANDMA_CHANINST_OFF, channelInstance);
+    st32(p + NV50VAIO_CHANDMA_OFFSET_OFF,   0u);   /* offset put/get = 0 */
+    int rc = nv_gsp_rm_alloc(ch, hClient, hDispRoot, h, coreClass, p, sizeof(p), status);
+    if (rc == NV_GSP_RM_OK && out_chan) *out_chan = h;
+    return rc;
+}

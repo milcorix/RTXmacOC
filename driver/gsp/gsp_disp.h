@@ -37,6 +37,32 @@
 #define NV_MEMORY_WRITECOMBINED      2u   /* nv_memory_type.h */
 #define NV_DISP_INST_SIZE            0x10000u  /* RAMIN дисплея = 64 КиБ */
 
+/* --- 5C.2: каналы дисплея --- */
+#define AD102_DISP_CORE_CHANNEL_DMA  0x0000c77du  /* core channel (Ada) */
+#define GA102_DISP_WINDOW_CHANNEL_DMA 0x0000c67eu /* window channel (Ada reuse GA102) */
+#define GA102_DISP_CURSOR            0x0000c67au  /* cursor (Ada reuse GA102) */
+#define NV_GSP_RM_DISPCORE_HANDLE    0xc77d0000u  /* AD102_DISP_CORE_CHANNEL_DMA<<16 | head0 */
+
+/* NV2080_CTRL_CMD_INTERNAL_DISPLAY_CHANNEL_PUSHBUFFER (ctrl2080internal.h, на внутр.
+   subdevice GSP). params (40б): addressSpace@0 physicalAddr@8(u64) limit@16(u64)
+   cacheSnoop@24 hclass@28 channelInstance@32 valid@36(NvBool). */
+#define NV2080_CTRL_CMD_INTERNAL_DISPLAY_CHANNEL_PUSHBUFFER  0x20800a58u
+#define NV_DISP_PB_PARAMS_SIZE       40u
+#define NV_DISP_PB_ADDRSPACE_OFF      0u
+#define NV_DISP_PB_PHYS_OFF           8u
+#define NV_DISP_PB_LIMIT_OFF         16u
+#define NV_DISP_PB_CACHESNOOP_OFF    24u
+#define NV_DISP_PB_HCLASS_OFF        28u
+#define NV_DISP_PB_CHANINST_OFF      32u
+#define NV_DISP_PB_VALID_OFF         36u
+#define NV_DISP_PB_SIZE          0x1000u  /* пушбуфер core-channel ≤ 4 КиБ */
+
+/* NV50VAIO_CHANNELDMA_ALLOCATION_PARAMETERS (nvos.h, 32б): channelInstance@0
+   hObjectBuffer@4 hObjectNotify@8 offset@12 pControl@16(u64) flags@24. */
+#define NV50VAIO_CHANDMA_PARAMS_SIZE  32u
+#define NV50VAIO_CHANDMA_CHANINST_OFF  0u
+#define NV50VAIO_CHANDMA_OFFSET_OFF   12u
+
 /* --- Контролы NV0073 SYSTEM (ctrl0073system.h) --- */
 #define NV0073_CTRL_CMD_SYSTEM_GET_NUM_HEADS  0x730102u
 #define NV0073_CTRL_CMD_SYSTEM_GET_SUPPORTED  0x730120u
@@ -134,5 +160,26 @@ int nv_gsp_disp_write_inst_mem(nv_gsp_rpc_chan *ch, uint32_t hIntClient, uint32_
  */
 int nv_gsp_disp_root_alloc(nv_gsp_rpc_chan *ch, uint32_t hClient, uint32_t hDevice,
                            uint32_t dispClass, uint32_t *out_root, uint32_t *status);
+
+/*
+ * 5C.2 шаг 1: зарегистрировать пушбуфер дисплей-канала (DISPLAY_CHANNEL_PUSHBUFFER)
+ * на ВНУТРЕННЕМ subdevice GSP. pb_phys — физ. VRAM-адрес обнулённого пушбуфера
+ * (≤4КиБ), hclass — класс канала (напр. AD102_DISP_CORE_CHANNEL_DMA), channelInstance
+ * — инстанс (core=0). Порт r535_chan_push.
+ */
+int nv_gsp_disp_channel_pushbuffer(nv_gsp_rpc_chan *ch, uint32_t hIntClient,
+                                   uint32_t hIntSubdevice, uint32_t hclass,
+                                   uint32_t channelInstance, uint64_t pb_phys,
+                                   uint64_t pb_limit, uint32_t *status);
+
+/*
+ * 5C.2 шаг 2: аллоцировать core-channel дисплея (AD102_DISP_CORE_CHANNEL_DMA) под
+ * display root. hObject=(coreClass<<16)|channelInstance, params
+ * NV50VAIO_CHANNELDMA_ALLOCATION_PARAMETERS (channelInstance, offset=0). Порт
+ * r535_dmac_init. *out_chan ← хэндл.
+ */
+int nv_gsp_disp_core_channel_alloc(nv_gsp_rpc_chan *ch, uint32_t hClient, uint32_t hDispRoot,
+                                   uint32_t coreClass, uint32_t channelInstance,
+                                   uint32_t *out_chan, uint32_t *status);
 
 #endif /* RTXMACOC_GSP_DISP_H */
