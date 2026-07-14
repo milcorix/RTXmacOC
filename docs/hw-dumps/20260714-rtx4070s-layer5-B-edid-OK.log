@@ -1,0 +1,109 @@
+=== run-gsp-boot-detached 2026-07-14T23:01:29Z ===
+kernel: 6.18.36-1-MANJARO
+-- грейс 6с перед гашением экрана --
+-- stop gdm + gpu-процессы --
+-- unbind fbcon (vtcon) --
+-- unload nvidia --
+   driver of 0000:01:00.0 after unload: (none)
+   0000:01:00.0 -> vfio-pci
+   0000:01:00.1 -> vfio-pci
+=== HARNESS ===
+VFIO: 0000:01:00.0, группа 11
+VFIO: BAR0 size=0x1000000
+VFIO: BusMaster (CMD=0x0007)
+DMA-арена: VA=0x7fe635600000 IOVA=0x10000000 size=0x4000000
+Заглушка IOVA[0..0x1000000] смаплена
+PMC_BOOT_0 = 0x194000a1
+VRAM=12282 МиБ; FRTS=0x2ff800000 sz=0x100000
+FWSEC-FRTS: mbox0=0x00000000 WPR2 set=1 [0x2ff800000..0x2ff8e0000]
+FWSEC WPR2 факт.: [0x2ff800000..0x2ff8e0000] → frtsSize=0xe0000 (вместо 0x100000)
+RPC shm@0x12699000 (cmdq@0x1269a000 msgq@0x126da000 ptes=129 msgCount=63); rmargs@0x12698000
+staging: fwimage@0x10200000 radix3-lvl0@0x1265c000 bl@0x1265d000 sig@0x12665000 meta@0x12666000 libos@0x12667000
+WPR2: start=0x2f5400000 end=0x2ff900000 heap=0x2f5500000 elf=0x2fd3b0000 boot=0x2ff7f8000
+cmdq: SET_SYSTEM_INFO(слоты 0..0) + SET_REGISTRY(слот 1) writePtr=2; bar0=0x52000000 bar1=0x40000000 bar3=0x50000000 bdf=0x100 reglen=82
+GSP reset(RISC-V) OK; GSP mbox=libos 0x12667000
+Booter: rc=0 mbox0=0x00000000 mbox1=0x00000000 (WprMeta=0x12666000)
+ДИАГ WPR2 после Booter: set=1 [0x2f5400000..0x2ff8e0000] (ожид. 0x2f5400000..0x2ff900000)
+ДИАГ GSP PRISCV: [+0x388]=0x00000080 [+0x100]=0xbadf5720 [+0x104]=0xbadf5720 [+0x108]=0xbadf5720 [+0x10c]=0xbadf5040 [+0x110]=0xbadf5720 [+0x120]=0xbadf5720 [+0x130]=0xbadf5720 [+0x388]=0x00000080 [+0x668]=0x00000111 [+0x800]=0xbadf5040 [+0x804]=0xbadf5040
+GSP RISC-V: active=1 (CPUCTL=0x00000080)
+GSP msg #1 @slot0: sig=0x43505256 function=0x101b len=36 ec=1
+GSP msg #2 @slot1: sig=0x43505256 function=0x1002 len=6376 ec=2
+  → выполняю CPU-секвенсер (cmdIndex=1576)...
+  seq выполнен: REG_WRITE=318 REG_POLL=103 CORE-ops=4
+  CPU-секвенсер: OK — GSP-RM возобновлён
+GSP msg #3 @slot3: sig=0x43505256 function=0x101b len=36 ec=1
+GSP msg #4 @slot4: sig=0x43505256 function=0x100c len=56 ec=1
+GSP msg #5 @slot5: sig=0x43505256 function=0x100c len=64 ec=1
+GSP msg #6 @slot6: sig=0x43505256 function=0x1001 len=32 ec=1  <== GSP_INIT_DONE
+GSP RPC: ★ GSP_INIT_DONE получен после 6 сообщений ★
+
+СЛОЙ 3: RPC-канал cmdq.wptr=2 seq=2 msgq.rptr=7
+СЛОЙ 3: GET_GSP_STATIC_INFO OK — FB-регионов: 5
+  FB[0] 0000000000000000..00000000030fffff rsvd=3100000 perf=0x0 comp=0 iso=0 prot=0
+  FB[1] 0000000003100000..00000002f034ffff rsvd=0 perf=0x6 comp=1 iso=1 prot=0
+  FB[2] 00000002f0350000..00000002f528ffff rsvd=4f40000 perf=0x6 comp=1 iso=1 prot=0
+  FB[3] 00000002f5290000..00000002f52fffff rsvd=70000 perf=0x0 comp=0 iso=0 prot=0
+  FB[4] 00000002f5300000..00000002ff9fffff rsvd=a700000 perf=0x0 comp=0 iso=0 prot=0
+  GSP internal: hClient=0xc2000005 hDevice=0xabcd0080 hSubdevice=0xabcd2080; bar1Pde=0x2f3ca9000 bar2Pde=0x2f5293000
+СЛОЙ 3: RM client  rc=0 status=0x0 handle=0xc1d00000
+СЛОЙ 3: RM device  rc=0 status=0x0 handle=0xde1d0000
+СЛОЙ 3: RM subdev  rc=0 status=0x0 handle=0x5d1d0000
+СЛОЙ 4 A0: FIFO device-info OK — движков: 11
+  engn[00] rm_type=0x01(GR0) runlist=0 pri_base=0xc00000 eng_desc=0xd334df00
+  engn[01] rm_type=0x30(?) runlist=11 pri_base=0xc04000 eng_desc=0x28c40800
+  engn[02] rm_type=0x26(?) runlist=12 pri_base=0xc02400 eng_desc=0xe97b6c01
+  engn[03] rm_type=0x1d(?) runlist=3 pri_base=0xc01000 eng_desc=0x8f99e100
+  engn[04] rm_type=0x09(COPYx) runlist=0 pri_base=0xc00000 eng_desc=0x793ceb00
+  engn[05] rm_type=0x0a(COPYx) runlist=0 pri_base=0xc00000 eng_desc=0x793ceb01
+  engn[06] rm_type=0x0b(COPYx) runlist=1 pri_base=0xc00400 eng_desc=0x793ceb02
+  engn[07] rm_type=0x0c(COPYx) runlist=2 pri_base=0xc00800 eng_desc=0x793ceb03
+  engn[08] rm_type=0x0d(COPYx) runlist=16 pri_base=0xc00c00 eng_desc=0x793ceb04
+  engn[09] rm_type=0x3d(?) runlist=5 pri_base=0xc03c00 eng_desc=0xdd7bab00
+  engn[10] rm_type=0x2c(SW) runlist=5 pri_base=0x0 eng_desc=0x95a6f500
+СЛОЙ 4 A0: CE0 найден — engineType=0x9 runlist=0 (для канала A2)
+СЛОЙ 3B: FB_GET_INFO_V2 OK (KiB): RAM=12576768 TOTAL_RAM=12576768 HEAP=12355136 HEAP_FREE=57720 BAR1=262144
+СЛОЙ 3B: FERMI_VASPACE_A rc=0 status=0x0 handle=0x90f10000
+СЛОЙ 3C: VRAM memlist phys=0x13100000 size=0x100000 rc=0 rpc_result=0x0 handle=0x00ca0001
+СЛОЙ 3D: GMMU build pt_base=0x13200000 va=0x20000000 npages=256 rc=0
+СЛОЙ 3D: COPY_SERVER_RESERVED_PDES rc=0 status=0x0
+СЛОЙ 3D: read-back PTE[va]=0x0000000001310001 (ожид. 0x0000000001310001) valid=1 MATCH
+СЛОЙ 4 A2: channel_alloc rc=0 status=0x0 handle=0xf1f00000 engineType=0x9
+СЛОЙ 4 A2: BIND rc=0 status=0x0
+СЛОЙ 4 A2: GPFIFO_SCHEDULE(enable) rc=0 status=0x0
+СЛОЙ 4 B: CE-объект (AMPERE_DMA_COPY_B) rc=0 status=0x0 handle=0x0000ce00
+СЛОЙ 4 C: sem-release payload=0xcafe0001 got=0xcafe0001 doorbell(0xbb0090)=0x0 ★ ИСПОЛНЕНО ★
+СЛОЙ 3: итог — static_info=OK, RM-цепочка=OK, FB-control=OK, vaspace=OK, VRAM-alloc=OK, VRAM-map=OK
+СЛОЙ 5 A0: NV04_DISPLAY_COMMON rc=0 status=0x0 handle=0x00730000
+СЛОЙ 5 A0: NUM_HEADS rc=0 status=0x0 heads=4; GET_SUPPORTED rc=0 status=0x0 displayMask=0x7f00 DDC=0x7f00
+СЛОЙ 5 B: CONNECT_STATE status=0x0 connected=0x300
+  disp 0x0100: OR rc=0 status=0x0 type=SOR proto=TMDS_A idx=4294967295 loc=0  ПОДКЛЮЧЁН
+    EDID rc=0 status=0x0 size=384 magic=00ffffffffffff00
+  disp 0x0200: OR rc=0 status=0x0 type=SOR proto=DP_B idx=4294967295 loc=0  ПОДКЛЮЧЁН
+    EDID rc=0 status=0x0 size=384 magic=00ffffffffffff00
+  disp 0x0400: OR rc=0 status=0x0 type=SOR proto=TMDS_B idx=4294967295 loc=0  нет
+  disp 0x0800: OR rc=0 status=0x0 type=SOR proto=DP_A idx=4294967295 loc=0  нет
+  disp 0x1000: OR rc=0 status=0x0 type=SOR proto=TMDS_A idx=4294967295 loc=0  нет
+  disp 0x2000: OR rc=0 status=0x0 type=SOR proto=DP_B idx=4294967295 loc=0  нет
+  disp 0x4000: OR rc=0 status=0x0 type=SOR proto=TMDS_B idx=4294967295 loc=0  нет
+ДИАГ: cmdq.rx.readPtr=0 msgq.tx.writePtr=35 GSPmbox0=0x00000000 mbox1=0x00000000
+ДИАГ: LOGINIT  put=0x23a (за 2с Δ=0)
+ДИАГ: LOGINTR  put=0x2 (за 2с Δ=0)
+ДИАГ: LOGRM    put=0x141 (за 2с Δ=0)
+ДИАГ: дампы логов и shm → /tmp/gsp-*.bin
+
+*** GSP-RM ОТВЕТИЛ ПО RPC (function=0x00001001) — СЛОЙ 2 ЗАВЕРШЁН ***
+*** СЛОЙ 3 (проход A): двусторонний RPC + RM client/device/subdevice — OK ***
+*** СЛОЙ 3 (проход B): память через RPC — FB-control=OK, VA-пространство(GMMU)=OK ***
+*** СЛОЙ 3 (проход C): регистрация VRAM-объекта (NV01_MEMORY_LIST_FBMEM) — OK ***
+*** СЛОЙ 3 (проход D): прямой GMMU — page-tables во VRAM + COPY_SERVER_RESERVED_PDES (GSP прошил PDB) ***
+*** СЛОЙ 4 (проход A0): FIFO device-info прочитан — движки GPU перечислены, CE0 найден ***
+*** СЛОЙ 5 (A0): дисплейный движок перечислен — NV04_DISPLAY_COMMON + heads + displayMask ***
+*** СЛОЙ 4 (проход B): объект copy-engine (AMPERE_DMA_COPY_B) на канале — OK ***
+*** СЛОЙ 4 (проход C): pushbuffer исполнен — host-семафор released ПЕРВАЯ КОМАНДА GPU ***
+*** СЛОЙ 4 (проход A): канал GPFIFO создан+bind+schedule (CE0) — ПЕРВЫЙ КАНАЛ НА ЖЕЛЕЗЕ ***
+
+=== РЕЗУЛЬТАТ: OK (GSP-RM загружен, RISC-V active) ===
+=== harness rc=0 ===
+-- [restore] вернуть GPU nvidia и поднять gdm --
+   card driver now: nvidia
+=== DONE 2026-07-14T23:01:51Z ===

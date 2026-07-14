@@ -185,11 +185,14 @@ docs/                   архитектура, роадмап, конспект
   (`nv_gsp_disp_common_alloc`, `nv_gsp_disp_get_num_heads`, `nv_gsp_disp_get_supported`),
   класс `NV04_DISPLAY_COMMON (0x0073)`, контролы `NV0073_CTRL_CMD_SYSTEM_GET_NUM_HEADS
   (0x730102)`/`GET_SUPPORTED (0x730120)`. Порт nouveau `r535_disp_oneinit`. На железе:
-  `heads=4`, `displayMask=0x7f00` (7 выходов, DDC). Пруф:
-  `docs/hw-dumps/20260714-rtx4070s-layer5-A0-disp-OK.log`. Тех-запись:
+  `heads=4`, `displayMask=0x7f00` (7 выходов, DDC). **5B 🟢 HW**: `nv_gsp_disp_or_get_info`
+  (`OR_GET_INFO 0x73028b`) — 7 OR (SOR TMDS/DP); `nv_gsp_disp_get_connect_state`
+  (`CONNECT_STATE 0x730122`) — **2 монитора** (`connected=0x300`); `nv_gsp_disp_get_edid`
+  (`GET_EDID_V2 0x730245`) — **EDID по DDC** (magic `00ffffffffffff00`, 384б). Пруфы:
+  `docs/hw-dumps/20260714-rtx4070s-layer5-{A0-disp,B-edid}-OK.log`. Тех-запись:
   **`docs/gsp-layer5-display.md`**. Это **аппаратный modeset-трек** (Linux/VFIO), от
-  macOS не зависит. Дальше: 5B (коннекторы+EDID), 5C (modeset+scanout). Интеграция в
-  macOS WindowServer — ОТДЕЛЬНЫЙ трек, замок Apple (открытый вопрос №1, гейт R10).
+  macOS не зависит. Дальше: 5C (modeset+scanout=картинка). Интеграция в macOS
+  WindowServer — ОТДЕЛЬНЫЙ трек, замок Apple (открытый вопрос №1, гейт R10).
 
 ## Ключевые источники (референс-база)
 

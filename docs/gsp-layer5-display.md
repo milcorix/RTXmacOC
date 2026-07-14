@@ -1,10 +1,13 @@
 # Слой 5 — дисплей / modeset через GSP-RM
 
-**Статус:** 🟢 **5A НА ЖЕЛЕЗЕ 2026-07-14** (RTX 4070S, Linux/VFIO): `NV04_DISPLAY_COMMON`
-создан, `heads=4`, `displayMask=0x7f00` (7 выходов, DDC=0x7f00). Эталон — nouveau
-`nvkm/engine/disp/r535.c` (`r535_disp_oneinit`/`_init`), контролы `ctrl0073*.h`,
-классы `nvif/class.h` / `g_allclasses.h`.
-**Доказательство:** `docs/hw-dumps/20260714-rtx4070s-layer5-A0-disp-OK.log`.
+**Статус:** 🟢 **5A+5B НА ЖЕЛЕЗЕ 2026-07-14** (RTX 4070S, Linux/VFIO): 5A —
+`NV04_DISPLAY_COMMON`, `heads=4`, `displayMask=0x7f00` (7 выходов); 5B — перечислены
+типы/протоколы всех 7 OR (SOR TMDS/DP), **два монитора обнаружены** (`connected=0x300`),
+**EDID прочитан по DDC** (magic `00ffffffffffff00`, 384 байта). Эталон — nouveau
+`nvkm/engine/disp/r535.c` (`r535_disp_oneinit`/`r535_outp_new`/`r535_outp_detect`/
+`r535_tmds_edid_get`), контролы `ctrl0073*.h`, классы `nvif/class.h`/`g_allclasses.h`.
+**Доказательства:** `docs/hw-dumps/20260714-rtx4070s-layer5-A0-disp-OK.log` (5A),
+`docs/hw-dumps/20260714-rtx4070s-layer5-B-edid-OK.log` (5B).
 
 **Важно про два трека слоя 5:**
 1. **Аппаратный modeset через GSP-RM** (этот документ) — гоним на Linux/VFIO, как
@@ -82,7 +85,14 @@ subdevice GSP — в nouveau делается до объектов. Для 5A (
 **5A 🟢 HW 2026-07-14:** `NV04_DISPLAY_COMMON` alloc `status=NV_OK`; `GET_NUM_HEADS`
 → `heads=4`; `GET_SUPPORTED` → `displayMask=0x7f00` (7 выходов, биты 8–14), `DDC=0x7f00`.
 prereq inst-mem НЕ потребовался. Пруф: `docs/hw-dumps/20260714-rtx4070s-layer5-A0-disp-OK.log`.
-**Дальше:** 5B (per-display OR_GET_INFO + CONNECT_STATE + EDID) → 5C (modeset+scanout).
+
+**5B 🟢 HW 2026-07-14:** `OR_GET_INFO` по всем 7 displayId → все `type=SOR`, протоколы
+TMDS_A/B, DP_A/B (idx=~0 — назначается при acquire). `CONNECT_STATE` → `connected=0x300`
+(два монитора: 0x100 TMDS_A + 0x200 DP_B). `GET_EDID_V2` для обоих → `size=384`, magic
+`00ffffffffffff00` (валидный EDID по DDC). Карта под нашим драйвером **видит мониторы и
+читает их EDID**. Пруф: `docs/hw-dumps/20260714-rtx4070s-layer5-B-edid-OK.log`.
+**Дальше:** 5C — modeset+scanout (display root `AD102_DISP 0xC770` + inst-mem + core/wndw
+каналы + framebuffer + link training + выставить mode из EDID = картинка на мониторе).
 
 ---
 
