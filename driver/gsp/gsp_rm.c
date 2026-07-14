@@ -280,6 +280,44 @@ int nv_gsp_rm_vaspace_ctor(nv_gsp_rpc_chan *ch, uint32_t hClient, uint32_t hDevi
     return rc;
 }
 
+int nv_gsp_rm_vaspace_copy_pdes(nv_gsp_rpc_chan *ch, uint32_t hClient, uint32_t hVASpace,
+                                uint32_t hSubDevice, uint32_t subDeviceId,
+                                uint64_t virtAddrLo, uint64_t virtAddrHi,
+                                const uint64_t *pd_phys, uint32_t numLevels,
+                                uint32_t *status)
+{
+    if (!ch || !pd_phys) return NV_GSP_RM_ERR_ARG;
+    if (numLevels < 2 || numLevels > 3) return NV_GSP_RM_ERR_ARG;  /* 4К-лист: PD3/PD2/PD1 */
+
+    /* NV90F1_CTRL_VASPACE_COPY_SERVER_RESERVED_PDES_PARAMS (184б). */
+    uint8_t p[NV90F1_COPY_PDES_PARAMS_SIZE];
+    for (unsigned i = 0; i < sizeof(p); i++) p[i] = 0;
+    st32(p + NV90F1_COPY_PDES_HSUBDEV_OFF,   hSubDevice);   /* 0 → использовать subDeviceId */
+    st32(p + NV90F1_COPY_PDES_SUBDEVID_OFF,  subDeviceId);
+    st64(p + NV90F1_COPY_PDES_PAGESIZE_OFF,  NV90F1_COPY_PDES_PAGESIZE_DEFAULT);
+    st64(p + NV90F1_COPY_PDES_VADDRLO_OFF,   virtAddrLo);
+    st64(p + NV90F1_COPY_PDES_VADDRHI_OFF,   virtAddrHi);
+    st32(p + NV90F1_COPY_PDES_NUMLEVELS_OFF, numLevels);
+
+    /* Уровни сверху вниз: PD3(корень)/PD2/PD1. size/pageShift — как r535_mmu_promote_vmm. */
+    static const uint64_t sizes[3]  = { NV90F1_LEVEL0_SIZE, NV90F1_LEVEL_PT_SIZE, NV90F1_LEVEL_PT_SIZE };
+    static const uint8_t  shifts[3] = { NV90F1_LEVEL0_PAGESHIFT, NV90F1_LEVEL1_PAGESHIFT, NV90F1_LEVEL2_PAGESHIFT };
+    for (uint32_t i = 0; i < numLevels; i++) {
+        uint8_t *lv = p + NV90F1_COPY_PDES_LEVELS_OFF + (size_t)i * NV90F1_COPY_PDES_LEVEL_STRIDE;
+        st64(lv + NV90F1_LEVEL_PHYSADDR_OFF,  pd_phys[i]);
+        st64(lv + NV90F1_LEVEL_SIZE_OFF,      sizes[i]);
+        st32(lv + NV90F1_LEVEL_APERTURE_OFF,  NV90F1_LEVEL_APERTURE_VIDMEM);
+        lv[NV90F1_LEVEL_PAGESHIFT_OFF] = shifts[i];
+    }
+
+    uint32_t st = 0xffffffffu;
+    int rc = nv_gsp_rm_control(ch, hClient, hVASpace,
+                               NV90F1_CTRL_CMD_VASPACE_COPY_SERVER_RESERVED_PDES,
+                               p, NV90F1_COPY_PDES_PARAMS_SIZE, &st);
+    if (status) *status = st;
+    return rc;
+}
+
 int nv_gsp_rm_vram_memlist(nv_gsp_rpc_chan *ch, uint32_t hClient, uint32_t hDevice,
                            uint64_t phys, uint64_t size,
                            uint32_t *out_handle, uint32_t *rpc_result)

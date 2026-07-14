@@ -386,6 +386,56 @@ static void test_map_memory_dma(void)
     CHECK(ld64t(mp + NV_MAP_MEMORY_DMA_DMAOFFSET_OFF) == 0, "dmaOffset IN == 0");
 }
 
+/* --- тест 10b: COPY_SERVER_RESERVED_PDES (проход D, прямой GMMU) --- */
+static void test_copy_pdes(void)
+{
+    printf("[test_copy_pdes]\n");
+    nv_gsp_rpc_chan ch; chan_init(&ch);
+    /* ответ GSP: rpc_gsp_rm_control echo (шапка 24б, status=0) + params(184) */
+    static uint8_t rep[NV_RM_CTRL_HDR_SIZE + NV90F1_COPY_PDES_PARAMS_SIZE];
+    memset(rep, 0, sizeof(rep));
+    st32(rep + NV_RM_CTRL_STATUS_OFF, 0);
+    put_msg(g_shm, &ch.lay, 0, NV_VGPU_MSG_FUNCTION_GSP_RM_CONTROL, 0, rep, sizeof(rep), 1);
+    set_msgq_wptr(g_shm, &ch.lay, 1);
+
+    uint64_t pd[3] = { 0x13200000ull, 0x13201000ull, 0x13202000ull }; /* PD3/PD2/PD1 phys */
+    uint64_t va_lo = 0x0, va_hi = NV90F1_COPY_PDES_PAGESIZE_DEFAULT - 1;
+    uint32_t st = 0xffffffffu;
+    int rc = nv_gsp_rm_vaspace_copy_pdes(&ch, NV_GSP_RM_CLIENT_HANDLE, NV_GSP_RM_VASPACE_HANDLE,
+                                         0, 0, va_lo, va_hi, pd, 3, &st);
+    CHECK(rc == NV_GSP_RM_OK, "copy_pdes OK");
+    CHECK(st == 0, "status == NV_OK");
+
+    /* framing запроса: cmd, hObject, params-раскладка */
+    const uint8_t *ce = g_shm + ch.lay.cmdq_off + NV_GSP_QUEUE_ENTRYOFF + 0;
+    const uint8_t *cp = ce + NV_GSP_RPC_PAYLOAD_OFF;              /* rpc_gsp_rm_control header */
+    const uint8_t *pp = cp + NV_RM_CTRL_HDR_SIZE;                 /* params */
+    CHECK(ld32(cp + NV_RM_CTRL_CMD_OFF) == NV90F1_CTRL_CMD_VASPACE_COPY_SERVER_RESERVED_PDES,
+          "cmd == COPY_SERVER_RESERVED_PDES (0x90f10106)");
+    CHECK(ld32(cp + NV_RM_CTRL_HOBJECT_OFF) == NV_GSP_RM_VASPACE_HANDLE, "hObject == vaspace");
+    CHECK(ld32(cp + NV_RM_CTRL_PARAMSIZE_OFF) == NV90F1_COPY_PDES_PARAMS_SIZE, "paramsSize == 184");
+    CHECK(ld64t(pp + NV90F1_COPY_PDES_PAGESIZE_OFF) == NV90F1_COPY_PDES_PAGESIZE_DEFAULT,
+          "pageSize == 0x20000000");
+    CHECK(ld64t(pp + NV90F1_COPY_PDES_VADDRLO_OFF) == va_lo, "virtAddrLo");
+    CHECK(ld64t(pp + NV90F1_COPY_PDES_VADDRHI_OFF) == va_hi, "virtAddrHi");
+    CHECK(ld32(pp + NV90F1_COPY_PDES_NUMLEVELS_OFF) == 3, "numLevelsToCopy == 3");
+    /* level[0] = PD3 (корень): phys, size=0x20, aperture=1(VRAM), pageShift=0x2f */
+    const uint8_t *l0 = pp + NV90F1_COPY_PDES_LEVELS_OFF;
+    CHECK(ld64t(l0 + NV90F1_LEVEL_PHYSADDR_OFF) == pd[0], "level[0].physAddress == PD3");
+    CHECK(ld64t(l0 + NV90F1_LEVEL_SIZE_OFF) == NV90F1_LEVEL0_SIZE, "level[0].size == 0x20");
+    CHECK(ld32(l0 + NV90F1_LEVEL_APERTURE_OFF) == NV90F1_LEVEL_APERTURE_VIDMEM, "level[0].aperture == VRAM");
+    CHECK(l0[NV90F1_LEVEL_PAGESHIFT_OFF] == NV90F1_LEVEL0_PAGESHIFT, "level[0].pageShift == 0x2f");
+    /* level[1] = PD2: phys, size=0x1000, pageShift=0x26 */
+    const uint8_t *l1 = pp + NV90F1_COPY_PDES_LEVELS_OFF + NV90F1_COPY_PDES_LEVEL_STRIDE;
+    CHECK(ld64t(l1 + NV90F1_LEVEL_PHYSADDR_OFF) == pd[1], "level[1].physAddress == PD2");
+    CHECK(ld64t(l1 + NV90F1_LEVEL_SIZE_OFF) == NV90F1_LEVEL_PT_SIZE, "level[1].size == 0x1000");
+    CHECK(l1[NV90F1_LEVEL_PAGESHIFT_OFF] == NV90F1_LEVEL1_PAGESHIFT, "level[1].pageShift == 0x26");
+    /* level[2] = PD1: phys, pageShift=0x1d */
+    const uint8_t *l2 = pp + NV90F1_COPY_PDES_LEVELS_OFF + 2 * NV90F1_COPY_PDES_LEVEL_STRIDE;
+    CHECK(ld64t(l2 + NV90F1_LEVEL_PHYSADDR_OFF) == pd[2], "level[2].physAddress == PD1");
+    CHECK(l2[NV90F1_LEVEL_PAGESHIFT_OFF] == NV90F1_LEVEL2_PAGESHIFT, "level[2].pageShift == 0x1d");
+}
+
 /* --- тест 11: размеры структур и константы --- */
 struct nv0000_mirror { uint32_t hClient; uint32_t processID; char processName[100]; };
 struct nv0080_mirror { uint32_t deviceId, hClientShare, hTargetClient, hTargetDevice;
@@ -395,6 +445,15 @@ struct nv2080_mirror { uint32_t subDeviceId; };
 struct nvos46_mirror { uint32_t hClient, hDevice, hDma, hMemory;
                        uint64_t offset, length; uint32_t flags;
                        uint64_t dmaOffset; uint32_t status; };
+/* Зеркало NV90F1_CTRL_VASPACE_COPY_SERVER_RESERVED_PDES_PARAMS (ctrl90f1.h) для
+   compile-probe смещений: NV_DECLARE_ALIGNED(NvU64,8) → естественное 8-выравн. */
+struct nv90f1_level_mirror { uint64_t physAddress; uint64_t size; uint32_t aperture; uint8_t pageShift; };
+struct nv90f1_copy_pdes_mirror {
+    uint32_t hSubDevice; uint32_t subDeviceId;
+    uint64_t pageSize; uint64_t virtAddrLo; uint64_t virtAddrHi;
+    uint32_t numLevelsToCopy;
+    struct nv90f1_level_mirror levels[6];  /* GMMU_FMT_MAX_LEVELS */
+};
 
 static void test_layout(void)
 {
@@ -419,6 +478,26 @@ static void test_layout(void)
           "NVOS46.status @48");
     CHECK(NV_VMEM_ALLOC_PARAMS_SIZE == 24, "NV_MEMORY_VIRTUAL_ALLOCATION_PARAMS == 24 (probe)");
     CHECK(NV_VMEM_HVASPACE_OFF == 16, "NV_MEMORY_VIRTUAL.hVASpace @16 (probe)");
+
+    /* COPY_SERVER_RESERVED_PDES: sizeof/смещения (compile-probe против зеркала) */
+    CHECK(sizeof(struct nv90f1_level_mirror) == NV90F1_COPY_PDES_LEVEL_STRIDE,
+          "sizeof(level) == 24 (stride)");
+    CHECK(sizeof(struct nv90f1_copy_pdes_mirror) == NV90F1_COPY_PDES_PARAMS_SIZE,
+          "sizeof(COPY_SERVER_RESERVED_PDES_PARAMS) == 184");
+    CHECK(offsetof(struct nv90f1_copy_pdes_mirror, pageSize) == NV90F1_COPY_PDES_PAGESIZE_OFF,
+          "COPY_PDES.pageSize @8");
+    CHECK(offsetof(struct nv90f1_copy_pdes_mirror, virtAddrLo) == NV90F1_COPY_PDES_VADDRLO_OFF,
+          "COPY_PDES.virtAddrLo @16");
+    CHECK(offsetof(struct nv90f1_copy_pdes_mirror, virtAddrHi) == NV90F1_COPY_PDES_VADDRHI_OFF,
+          "COPY_PDES.virtAddrHi @24");
+    CHECK(offsetof(struct nv90f1_copy_pdes_mirror, numLevelsToCopy) == NV90F1_COPY_PDES_NUMLEVELS_OFF,
+          "COPY_PDES.numLevelsToCopy @32");
+    CHECK(offsetof(struct nv90f1_copy_pdes_mirror, levels) == NV90F1_COPY_PDES_LEVELS_OFF,
+          "COPY_PDES.levels @40");
+    CHECK(offsetof(struct nv90f1_level_mirror, aperture) == NV90F1_LEVEL_APERTURE_OFF,
+          "level.aperture @16");
+    CHECK(offsetof(struct nv90f1_level_mirror, pageShift) == NV90F1_LEVEL_PAGESHIFT_OFF,
+          "level.pageShift @20");
 }
 
 int main(void)
@@ -434,6 +513,7 @@ int main(void)
     test_vram_memlist();
     test_vmem_ctor();
     test_map_memory_dma();
+    test_copy_pdes();
     test_layout();
     printf(failed ? "\n=== gsp_rm_test: ЕСТЬ ПРОВАЛЫ ===\n" : "\n=== gsp_rm_test: ВСЕ ТЕСТЫ ПРОШЛИ ===\n");
     return failed ? 1 : 0;

@@ -1,14 +1,16 @@
-# Слой 3 — двусторонний RPC к GSP-RM: A+B+C на железе; D = прямой GMMU (RPC-путь = тупик)
+# Слой 3 — двусторонний RPC к GSP-RM: A+B+C+D на железе (D = прямой GMMU)
 
-**Статус:** 🟢 проход A (2026-06-30) + проходы B, C (2026-07-01) на RTX 4070 Super
-(AD104), Linux/VFIO. Проход D через `MAP_MEMORY_DMA (14)` **проверен на железе
-2026-07-14 и отвергнут GSP** (`rpc_result=0x2a NV_ERR_INVALID_FUNCTION`) — этот RPC
-не диспетчеризуется в GSP-offload модели (см. §4D). Дальше D переписывается на
-**прямой GMMU-маппинг** (host-side page-tables, как nouveau `vmm`).
+**Статус:** 🟢 проход A (2026-06-30) + проходы B, C (2026-07-01) + **проход D
+(2026-07-14, прямой GMMU)** на RTX 4070 Super (AD104), Linux/VFIO. Ранняя попытка D
+через `MAP_MEMORY_DMA (14)` отвергнута GSP (`rpc_result=0x2a NV_ERR_INVALID_FUNCTION`,
+§4D.1); переписано на **прямой GMMU-маппинг** (host-side page-tables во VRAM +
+`COPY_SERVER_RESERVED_PDES`, как nouveau `vmm`/`r535_mmu_promote_vmm`) — **на железе
+`status=NV_OK`, read-back PTE совпал** (§4D.2, §4D.3).
 **Доказательство:** `docs/hw-dumps/20260630-rtx4070s-layer3-rpc-OK.log` (A),
 `docs/hw-dumps/20260701-rtx4070s-layer3-passB-OK.log` (B),
 `docs/hw-dumps/20260701-rtx4070s-layer3-passC-vram-OK.log` (C),
-`docs/hw-dumps/gsp-boot-layer3-passD-20260714.log` (D — отрицательный, fn=14 отвергнут).
+`docs/hw-dumps/gsp-boot-layer3-passD-20260714.log` (D — отрицательный, fn=14 отвергнут),
+`docs/hw-dumps/20260714-rtx4070s-layer3-passD-gmmu-OK.log` (D — 🟢 прямой GMMU).
 **Оркестратор:** `tools/gsp_boot_linux.c` (тот же прогон, что и слой 2; блоки
 «СЛОЙ 3»/«3B»/«3C»/«3D»).
 **Портируемая логика:** `driver/gsp/gsp_rm.{c,h}`. Офлайн-тест: `tools/gsp_rm_test.c`
@@ -42,14 +44,17 @@
    **зарегистрирован физический VRAM-диапазон** (1 МиБ по phys=0x13100000). В
    GSP-модели VRAM'ом владеет гость: он даёт список физ. страниц (не GSP из кучи).
 
-**Проход D** (VRAM → GPU VA; ❌ RPC-путь отвергнут железом, переписывается):
-6. `MAP_MEMORY_DMA (14)` с `hDma=NV01_MEMORY_VIRTUAL`, `hMemory=VRAM memlist`:
-   на железе GSP вернул `rpc_result=0x2a` (`NV_ERR_INVALID_FUNCTION`) — функция не
-   диспетчеризуется. Промежуточные шаги прошли (`NV01_MEMORY_VIRTUAL` создан,
-   `status=0`), но сам маппинг по RPC в GSP-модели невозможен (§4D). Верный путь —
-   прямой GMMU (host пишет PDE/PTE во VRAM).
+**Проход D** (VRAM → GPU VA; 🟢 прямой GMMU на железе 2026-07-14):
+6. Ранний RPC-заход `MAP_MEMORY_DMA (14)` отвергнут (`rpc_result=0x2a
+   NV_ERR_INVALID_FUNCTION`, §4D.1) — это путь vGPU/SR-IOV.
+7. **Прямой GMMU** (§4D.2): клиент сам строит иерархию PD3→…→SPT во VRAM через
+   PRAMIN (`nv_gmmu_map_range`), затем `RM_CONTROL COPY_SERVER_RESERVED_PDES
+   (0x90f10106)` отдаёт GSP физ-адреса корневых уровней PD3/PD2/PD1 → GSP прошивает
+   PDB в instance-block. На железе: `status=NV_OK`, read-back листовой PTE через
+   PRAMIN совпал с ожидаемой (`0x1310001` = `(0x13100000>>4)|VALID`). VRAM
+   присутствует в GPU VA-пространстве.
 
-После реализации D (прямой GMMU) — RM-control'ы FIFO/GR для слоя 4 (каналы).
+После D — RM-control'ы FIFO/GR для слоя 4 (каналы).
 
 ---
 
@@ -320,6 +325,52 @@ PD3 `[48:47]`(2), PD2 `[46:38]`(9), PD1 `[37:29]`(9), PD0 `[28:21]`(8), SPT
 `[20:12]`(9), смещение `[11:0]`. (Соответствует `page.shift`-таблице nouveau
 `tu102`: 47/38/29/21/16/12.) pageShift в COPY_SERVER: 47=корень, 38, 29 — т.е.
 GSP зеркалит PD3/PD2/PD1, а PD0+SPT остаются чисто клиентскими.
+
+### 4D.3 Реализация прямого GMMU — 🟢 HW 2026-07-14
+
+Разведка §4D.2 реализована и **подтверждена на железе**. Доказательство:
+`docs/hw-dumps/20260714-rtx4070s-layer3-passD-gmmu-OK.log`.
+
+**Код.**
+- `driver/gsp/gmmu.{c,h}` — PRAMIN-доступ CPU→VRAM (рег `NV_PBUS_BAR0_WINDOW=0x1700`,
+  окно `BAR0+0x700000`), кодеры PTE/PDE формата Ada (ga10x/gp100), построение
+  иерархии PD3→PD2→PD1→PD0→SPT и `nv_gmmu_map_range` (256 стр.). Офлайн-тест
+  `tools/gmmu_test.c` (`make gmmu-test`).
+- `nv_gsp_rm_vaspace_copy_pdes` в `driver/gsp/gsp_rm.c` — `RM_CONTROL`
+  `cmd=0x90f10106` на объекте vaspace (`0x90f10000`) через готовый `nv_gsp_rm_control`.
+  Структура `NV90F1_CTRL_VASPACE_COPY_SERVER_RESERVED_PDES_PARAMS` (184б) сверена
+  байт-в-байт с `ctrl90f1.h`; значения `levels[0..2]` — как `r535_mmu_promote_vmm`
+  (`mmu/r535.c`). Compile-probe смещений/sizeof (`NV_DECLARE_ALIGNED(..,8)`) +
+  фрейминг-тест — в `tools/gsp_rm_test.c` (`make gsp-rm-test`).
+
+**Оркестрация** (блок «3D» в `tools/gsp_boot_linux.c`), после регистрации VRAM-memlist
+(phys=`0x13100000`, 1 МиБ) и создания `FERMI_VASPACE_A`:
+1. Выделить 5 page-tables во VRAM сразу за объектом (`pt_base=0x13200000`, 5×4К:
+   PD3/PD2/PD1/PD0/SPT).
+2. `nv_gmmu_map_range(io, &win, &t, va=0x20000000, vphys=0x13100000, npages=256)` —
+   построить одноветочную иерархию через PRAMIN. VA выровнен на `pageSize=0x20000000`.
+3. `nv_gsp_rm_vaspace_copy_pdes(hClient, hVASpace, hSubDevice=0, subDeviceId=0,
+   virtAddrLo=0x20000000, virtAddrHi=+0x20000000−1, pd_phys={PD3,PD2,PD1},
+   numLevels=3)` → GSP прошивает PDB.
+4. Read-back листовой PTE через `nv_gmmu_read_pte` для самопроверки.
+
+**Результат HW (лог):**
+```
+СЛОЙ 3D: GMMU build pt_base=0x13200000 va=0x20000000 npages=256 rc=0
+СЛОЙ 3D: COPY_SERVER_RESERVED_PDES rc=0 status=0x0
+СЛОЙ 3D: read-back PTE[va]=0x0000000001310001 (ожид. 0x0000000001310001) valid=1 MATCH
+```
+`status=NV_OK` (GSP принял корневые PDE) + PTE `MATCH` (`0x1310001` =
+`(0x13100000>>4)|VALID`, aperture=VIDMEM(0), kind=0). **Метрика прохода D
+достигнута** — VRAM присутствует в GPU-виртуальном адресном пространстве. Дальше —
+слой 4 (каналы: FIFO/GR RM-control'ы).
+
+**Ключевые значения (сверены, не угаданы):**
+- `pageSize=0x20000000` (512 МиБ — покрытие PD1-записи).
+- `levels[0]` PD3 (корень): `size=0x20, aperture=1(VRAM), pageShift=0x2f(47)`.
+- `levels[1]` PD2: `size=0x1000, aperture=1, pageShift=0x26(38)`.
+- `levels[2]` PD1: `size=0x1000, aperture=1, pageShift=0x1d(29)`.
+- `hSubDevice=0, subDeviceId=0` — как в `r535_mmu_promote_vmm` (unicast, субустр. 0).
 
 ---
 

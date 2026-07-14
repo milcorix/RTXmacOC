@@ -34,6 +34,7 @@
 #include "../driver/gsp/gsp_fw.h"
 #include "../driver/gsp/gsp_rpc.h"
 #include "../driver/gsp/gsp_rm.h"
+#include "../driver/gsp/gmmu.h"
 #include "../driver/gsp/fw_blob.h"
 
 #define TIMEOUT_US (2u * 1000u * 1000u)
@@ -566,27 +567,53 @@ static int run(const nv_mmio_t *io, struct arena *ar, const char *bdf)
                 printf("СЛОЙ 3C: VRAM memlist phys=0x%llx size=0x%llx rc=%d rpc_result=0x%x handle=0x%08x\n",
                        (unsigned long long)vphys, (unsigned long long)vsize, mrc, mrres, hmem);
 
-                /* --- ПРОХОД D: memlist VRAM → GPU VA в FERMI_VASPACE_A ---
-                   Шаг 1: объект VirtualMemory (NV01_MEMORY_VIRTUAL), ссылающийся на
-                   наш vaspace — это и есть hDma для MAP_MEMORY_DMA (не сам vaspace).
-                   Шаг 2: MAP_MEMORY_DMA с dmaOffset=0, flags=0 — RM сам выбирает VA. */
+                /* --- ПРОХОД D: memlist VRAM → GPU VA через ПРЯМОЙ GMMU ---
+                   RPC-путь (MAP_MEMORY_DMA fn=14) на железе = тупик (NV_ERR_INVALID_
+                   FUNCTION, gsp-layer3-rpc.md §4D.1). Правильно: КЛИЕНТ сам строит
+                   page-tables во VRAM (PRAMIN), а GSP получает физ-адреса корневых
+                   уровней через RM_CONTROL COPY_SERVER_RESERVED_PDES (0x90f10106).
+                   Эталон — nouveau r535_mmu_promote_vmm. */
                 if (l3_vram_ok && l3_vaspace_ok) {
-                    uint32_t hvmem = 0, vmst = 0xffffffffu;
-                    int vmrc = nv_gsp_rm_vmem_ctor(&ch, hcli, hdev, hva, &hvmem, &vmst);
-                    int vmem_ok = (vmrc == NV_GSP_RM_OK && vmst == 0);
-                    printf("СЛОЙ 3D: NV01_MEMORY_VIRTUAL rc=%d status=0x%x handle=0x%08x%s\n",
-                           vmrc, vmst, hvmem, vmem_ok ? "" : "  (не OK)");
-                    if (vmem_ok) {
-                        uint64_t gpu_va = 0;
-                        uint32_t mapst = 0xffffffffu, mapres = 0xffffffffu;
-                        int maprc = nv_gsp_rm_map_memory_dma(&ch, hcli, hdev, hvmem, hmem,
-                                                            0, vsize, NVOS46_FLAGS_DEFAULT,
-                                                            &gpu_va, &mapst, &mapres);
-                        l3_map_ok = (maprc == NV_GSP_RM_OK && mapres == 0 &&
-                                     mapst == 0 && gpu_va != 0);
-                        printf("СЛОЙ 3D: MAP_MEMORY_DMA rc=%d rpc_result=0x%x status=0x%x GPU_VA=0x%llx%s\n",
-                               maprc, mapres, mapst, (unsigned long long)gpu_va,
-                               l3_map_ok ? "" : "  (не OK)");
+                    /* 5 page-tables во VRAM сразу за замапленным объектом (5×4К). */
+                    uint64_t pt_base = (vphys + vsize + 0xfffull) & ~0xfffull;
+                    nv_gmmu_tables t;
+                    t.pd3_phys = pt_base + 0ull * 0x1000ull;   /* корень (PD3) */
+                    t.pd2_phys = pt_base + 1ull * 0x1000ull;
+                    t.pd1_phys = pt_base + 2ull * 0x1000ull;
+                    t.pd0_phys = pt_base + 3ull * 0x1000ull;
+                    t.spt_phys = pt_base + 4ull * 0x1000ull;   /* лист (SPT) */
+
+                    /* Целевой GPU VA: выровнен на pageSize=0x20000000 (512 МиБ). */
+                    uint64_t va = NV90F1_COPY_PDES_PAGESIZE_DEFAULT;   /* второй слот, ≠0 */
+                    uint32_t npages = (uint32_t)(vsize >> 12);         /* 256 */
+
+                    /* Построить иерархию PD3→…→SPT для [va, va+1МиБ) → phys vphys. */
+                    uint64_t win = ~0ull;                              /* инвалидировать кэш окна */
+                    int grc = nv_gmmu_map_range(io, &win, &t, va, vphys, npages);
+                    printf("СЛОЙ 3D: GMMU build pt_base=0x%llx va=0x%llx npages=%u rc=%d\n",
+                           (unsigned long long)pt_base, (unsigned long long)va, npages, grc);
+
+                    if (grc == 0) {
+                        /* Отдать GSP корневые уровни PD3/PD2/PD1 (сверху вниз). */
+                        uint64_t pd_phys[3] = { t.pd3_phys, t.pd2_phys, t.pd1_phys };
+                        uint64_t va_lo = va;
+                        uint64_t va_hi = va + NV90F1_COPY_PDES_PAGESIZE_DEFAULT - 1;
+                        uint32_t cpst = 0xffffffffu;
+                        /* hSubDevice=0, subDeviceId=0 — как r535_mmu_promote_vmm (unicast,
+                           subDevice 0); GSP резолвит субустройство по нашему клиенту. */
+                        int cprc = nv_gsp_rm_vaspace_copy_pdes(&ch, hcli, hva, 0, 0,
+                                                               va_lo, va_hi, pd_phys, 3, &cpst);
+                        l3_map_ok = (cprc == NV_GSP_RM_OK && cpst == 0);
+                        printf("СЛОЙ 3D: COPY_SERVER_RESERVED_PDES rc=%d status=0x%x%s\n",
+                               cprc, cpst, l3_map_ok ? "" : "  (не OK)");
+
+                        /* Bonus: read-back записанной листовой PTE через PRAMIN. */
+                        uint64_t pte = nv_gmmu_read_pte(io, &win, t.spt_phys, va);
+                        uint64_t want = nv_gmmu_make_pte_vram(vphys, 0, 0);
+                        printf("СЛОЙ 3D: read-back PTE[va]=0x%016llx (ожид. 0x%016llx) valid=%d %s\n",
+                               (unsigned long long)pte, (unsigned long long)want,
+                               (int)(pte & NV_GMMU_PTE_VALID),
+                               (pte == want) ? "MATCH" : "MISMATCH");
                     }
                 }
             } else {
@@ -643,7 +670,7 @@ static int run(const nv_mmio_t *io, struct arena *ar, const char *bdf)
         if (l3_vram_ok)
             printf("*** СЛОЙ 3 (проход C): регистрация VRAM-объекта (NV01_MEMORY_LIST_FBMEM) — OK ***\n");
         if (l3_map_ok)
-            printf("*** СЛОЙ 3 (проход D): VRAM смаппирован в FERMI_VASPACE_A — GPU VA получен ***\n");
+            printf("*** СЛОЙ 3 (проход D): прямой GMMU — page-tables во VRAM + COPY_SERVER_RESERVED_PDES (GSP прошил PDB) ***\n");
         return 0;
     }
     if (brc==NV_OK && mb0==0 && active){

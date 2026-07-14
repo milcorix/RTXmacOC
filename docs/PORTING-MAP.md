@@ -311,15 +311,19 @@ GSP), но `msgq.writePtr=0` (нет GSP_INIT_DONE), LOGRM едва тронут
 | `nv_gsp_rm_vram_memlist` | `instmem/r535.c` `fbsr_memlist` + `g_rpc-structures.h`/`sdk-structures.h`/`cl84a0.h` | ALLOC_MEMORY(4), NV01_MEMORY_LIST_FBMEM(0x82), rpc_alloc_memory_v13_01 (pteDesc@44, pte[]@48), flags=0x40000200, format=6, pte[i]=(phys>>12)+i | 🟢 HW (phys=0x13100000, 1 МиБ) |
 | `nv_gsp_rm_vmem_ctor` | OGK `virtual_mem.c` `virtmemConstruct` + `cl0070.h` | NV01_MEMORY_VIRTUAL(0x70), h=0x00700001, NV_MEMORY_VIRTUAL_ALLOCATION_PARAMS(24б): offset@0=0, limit@8=0, hVASpace@16 | 🟢 HW (status=0, объект создан) |
 | `nv_gsp_rm_map_memory_dma` | OGK `rpc.c` `rpcMapMemoryDma_v03_00` + `g_rpc-structures.h`/`g_sdk-structures.h`/`nvos.h` | MAP_MEMORY_DMA(14), NVOS46(56б): hDma=NV01_MEMORY_VIRTUAL, hMemory=memlist, offset=0, length=1 МиБ, flags=0, dmaOffset IN=0/OUT@40, status@48 | 🔴 HW: GSP отверг `rpc_result=0x2a NV_ERR_INVALID_FUNCTION` (fn=14 не диспетчеризуется в GSP-offload; путь vGPU) |
+| `driver/gsp/gmmu.{c,h}` PRAMIN | nouveau `instmem/nv50.c` + OGK `bar2_walk.c` | `NV_PBUS_BAR0_WINDOW`=0x1700 (_BASE 23:0=phys>>16, _TARGET 25:24), окно данных `BAR0+0x700000` (1 МиБ); аим+rd/wr/fill/wr64 | 🟢 HW (read-back PTE через PRAMIN совпал) |
+| `nv_gmmu_make_pte/pde` + `map_range` | nouveau `vmmgp100.c` (`gp100_vmm_pgt_pte`/`pde`/`valid`, `desc_12`) | формат Ada=ga10x: PTE=(phys>>4)\|VALID, aper VIDMEM=0, kind=0; PDE=(pt>>4)\|APER_VRAM(1<<1); иерархия PD3[48:47]/PD2[46:38]/PD1[37:29]/PD0[28:21 dual16б]/SPT[20:12] | 🟢 HW (PTE `0x1310001` MATCH) |
+| `nv_gsp_rm_vaspace_copy_pdes` | nouveau `mmu/r535.c` `r535_mmu_promote_vmm` + OGK `ctrl90f1.h` | RM_CONTROL `COPY_SERVER_RESERVED_PDES`(0x90f10106) на vaspace; PARAMS(184б, compile-probe): pageSize=0x20000000, virtAddrLo/Hi, numLevelsToCopy=3, levels[6]{physAddress@0,size@8,aperture@16,pageShift@20}(24б); L0 PD3{0x20,1,0x2f} L1 PD2{0x1000,1,0x26} L2 PD1{0x1000,1,0x1d} | 🟢 HW (status=NV_OK) |
 
-**Полная тех-запись:** `docs/gsp-layer3-rpc.md` (проходы A+B+C+D). Дальше:
-проход D переписывается на **прямой GMMU-маппинг** (host-side page-tables во VRAM,
-PDE3→PTE для Ada, как nouveau `vmm` / `dmaAllocMap`) — RPC-путь `MAP_MEMORY_DMA`
-отвергнут железом (см. ниже). После него — слой 4 (каналы: FIFO/GR).
+**Полная тех-запись:** `docs/gsp-layer3-rpc.md` (проходы A+B+C+D). Проход D закрыт
+на железе через **прямой GMMU-маппинг** (host-side page-tables во VRAM + `RM_CONTROL
+COPY_SERVER_RESERVED_PDES`, как nouveau `vmm`/`r535_mmu_promote_vmm`): `status=NV_OK`,
+read-back PTE совпал (`docs/hw-dumps/20260714-rtx4070s-layer3-passD-gmmu-OK.log`).
+Слой 3 закрыт полностью (A+B+C+D) → дальше слой 4 (каналы: FIFO/GR).
 Примечания: FB_GET_INFO_V2 отсутствовал в nouveau-выжимке — дотянут из полного
 публичного OGK `ctrl2080fb.h` (535.113.01), в репо не коммитим. **Тупик 1:** VRAM НЕ
 через `NV01_MEMORY_LOCAL_USER`/heap-alloc GSP (отвергается) — гость даёт физ. страницы
 (memlist), см. тех-запись §4C/§5. **Тупик 2:** VRAM НЕ маппится в GPU VA через
 `MAP_MEMORY_DMA (14)` RPC — GSP отвечает `NV_ERR_INVALID_FUNCTION` (это путь
 vGPU/SR-IOV; в GSP-offload page-tables ведёт host RM локально). Правильно — прямой
-GMMU, см. §4D.
+GMMU (§4D.2/§4D.3), реализовано и подтверждено.

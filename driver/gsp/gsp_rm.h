@@ -71,6 +71,40 @@
 #define NV_VASPACE_ALLOC_PARAMS_SIZE          48u
 #define NV_VASPACE_ALLOCATION_INDEX_GPU_NEW   0u
 
+/* --- Проход D (прямой GMMU): отдать GSP корневые PDE через RM_CONTROL ---
+ * NV90F1_CTRL_CMD_VASPACE_COPY_SERVER_RESERVED_PDES (ctrl90f1.h). Клиент сам владеет
+ * page-tables (пишет PDE/PTE во VRAM через PRAMIN, см. gmmu.c), а этим контролом
+ * отдаёт GSP физ-адреса верхних PD-уровней, чтобы тот «прибил» их и прошил PDB в
+ * instance-block на своей стороне. Эталон — nouveau r535_mmu_promote_vmm (mmu/r535.c).
+ * Контрол шлётся на объект vaspace (FERMI_VASPACE_A, 0x90f10000). */
+#define NV90F1_CTRL_CMD_VASPACE_COPY_SERVER_RESERVED_PDES  0x90f10106u
+/* Раскладка NV90F1_CTRL_VASPACE_COPY_SERVER_RESERVED_PDES_PARAMS (compile-probe,
+   NV_DECLARE_ALIGNED(..,8), GMMU_FMT_MAX_LEVELS=6):
+     hSubDevice@0 subDeviceId@4 pageSize@8 virtAddrLo@16 virtAddrHi@24
+     numLevelsToCopy@32 [pad@36] levels[6]@40 (stride 24).
+   level: physAddress@0 size@8 aperture@16 pageShift@20 [pad до 24]. */
+#define NV90F1_COPY_PDES_PARAMS_SIZE   184u   /* 40 + 6*24 */
+#define NV90F1_COPY_PDES_HSUBDEV_OFF     0u
+#define NV90F1_COPY_PDES_SUBDEVID_OFF    4u
+#define NV90F1_COPY_PDES_PAGESIZE_OFF    8u
+#define NV90F1_COPY_PDES_VADDRLO_OFF    16u
+#define NV90F1_COPY_PDES_VADDRHI_OFF    24u
+#define NV90F1_COPY_PDES_NUMLEVELS_OFF  32u
+#define NV90F1_COPY_PDES_LEVELS_OFF     40u
+#define NV90F1_COPY_PDES_LEVEL_STRIDE   24u
+#define NV90F1_LEVEL_PHYSADDR_OFF        0u
+#define NV90F1_LEVEL_SIZE_OFF            8u
+#define NV90F1_LEVEL_APERTURE_OFF       16u
+#define NV90F1_LEVEL_PAGESHIFT_OFF      20u
+/* Значения из nouveau (Ada/ga10x) для 4К-листа (desc_12): */
+#define NV90F1_COPY_PDES_PAGESIZE_DEFAULT  0x20000000ull  /* 512 МиБ (покрытие PD1-записи) */
+#define NV90F1_LEVEL_APERTURE_VIDMEM       1u             /* VRAM */
+#define NV90F1_LEVEL0_SIZE                 0x20ull        /* корень PD3: 4 записи ×8 */
+#define NV90F1_LEVEL_PT_SIZE               0x1000ull      /* PD2/PD1: полная страница */
+#define NV90F1_LEVEL0_PAGESHIFT            0x2fu          /* 47 — PD3 (корень) */
+#define NV90F1_LEVEL1_PAGESHIFT            0x26u          /* 38 — PD2 */
+#define NV90F1_LEVEL2_PAGESHIFT            0x1du          /* 29 — PD1 */
+
 /* --- VRAM-аллокация через ALLOC_MEMORY (memlist, как nouveau fbsr_memlist) ---
  * В GSP-модели VRAM'ом владеет гость: он выбирает физический диапазон и регистрирует
  * его как memlist. rpc_alloc_memory_v13_01 (g_rpc-structures.h) + pte_desc
@@ -246,6 +280,23 @@ int nv_gsp_fb_get_info(nv_gsp_rpc_chan *ch, uint32_t hClient, uint32_t hSubdevic
    index=GPU_NEW, прочие поля 0 (дефолтное новое полное пространство). */
 int nv_gsp_rm_vaspace_ctor(nv_gsp_rpc_chan *ch, uint32_t hClient, uint32_t hDevice,
                            uint32_t *out_vaspace, uint32_t *status);
+
+/*
+ * Проход D (прямой GMMU): отдать GSP физ-адреса верхних PD-уровней иерархии, которую
+ * клиент сам построил во VRAM (см. gmmu.c). RM_CONTROL cmd=0x90f10106 на объекте
+ * hVASpace (FERMI_VASPACE_A). GSP «прибивает» переданные уровни и прошивает PDB в
+ * своём instance-block; листовые PTE (SPT) — общий физ-VRAM, отдельного RPC не нужно.
+ *
+ * pd_phys[0..numLevels-1] — физ-адреса уровней СВЕРХУ ВНИЗ: [0]=PD3(корень), [1]=PD2,
+ * [2]=PD1. numLevels = 2 или 3 (для 4К-листа Ada строим 3). virtAddrLo/Hi — диапазон
+ * GPU VA, покрываемый этими PDE (должен быть выровнен на pageSize=0x20000000).
+ * *status ← поле status ответа RM (NV_OK==0). Порт nouveau r535_mmu_promote_vmm.
+ */
+int nv_gsp_rm_vaspace_copy_pdes(nv_gsp_rpc_chan *ch, uint32_t hClient, uint32_t hVASpace,
+                                uint32_t hSubDevice, uint32_t subDeviceId,
+                                uint64_t virtAddrLo, uint64_t virtAddrHi,
+                                const uint64_t *pd_phys, uint32_t numLevels,
+                                uint32_t *status);
 
 /*
  * Регистрация VRAM-диапазона как memlist (NV01_MEMORY_LIST_FBMEM) через ALLOC_MEMORY.
