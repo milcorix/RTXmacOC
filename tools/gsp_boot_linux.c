@@ -786,6 +786,42 @@ static int run(const nv_mmio_t *io, struct arena *ar, const char *bdf)
                        hrc, hst, nheads, src, sst, dmask, dddc);
                 l5_disp_ok = (hrc==NV_GSP_RM_OK && hst==0 && src==NV_GSP_RM_OK && sst==0 &&
                               nheads > 0 && dmask != 0);
+
+                /* --- СЛОЙ 5 B: коннекторы (OR_GET_INFO) + connect-state + EDID ---
+                   Перебираем displayId-биты из displayMask: тип/протокол выхода (SOR
+                   DP/TMDS), подключён ли монитор, EDID (если подключён). Headless:
+                   OR-инфо статично; connect/EDID покажут монитор при наличии. */
+                if (l5_disp_ok) {
+                    uint32_t conn = 0, cst = 0xffffffffu;
+                    nv_gsp_disp_get_connect_state(&ch, hcli, hdisp, dmask, &conn, &cst);
+                    printf("СЛОЙ 5 B: CONNECT_STATE status=0x%x connected=0x%x\n", cst, conn);
+                    for (uint32_t b = 0; b < 32; b++) {
+                        uint32_t did = dmask & (1u << b);
+                        if (!did) continue;
+                        uint32_t ty=0, pr=0, ix=0, lo=0, ost=0xffffffffu;
+                        int orc = nv_gsp_disp_or_get_info(&ch, hcli, hdisp, did, &ty, &pr, &ix, &lo, &ost);
+                        const char *tn = (ty==NV0073_OR_TYPE_SOR) ? "SOR" :
+                                         (ty==NV0073_OR_TYPE_DAC) ? "DAC" :
+                                         (ty==NV0073_OR_TYPE_NONE) ? "NONE" : "?";
+                        const char *pn = (pr==NV0073_OR_PROTOCOL_SOR_DP_A) ? "DP_A" :
+                                         (pr==NV0073_OR_PROTOCOL_SOR_DP_B) ? "DP_B" :
+                                         (pr==NV0073_OR_PROTOCOL_SOR_SINGLE_TMDS_A) ? "TMDS_A" :
+                                         (pr==NV0073_OR_PROTOCOL_SOR_SINGLE_TMDS_B) ? "TMDS_B" :
+                                         (pr==NV0073_OR_PROTOCOL_SOR_DUAL_TMDS) ? "DUAL_TMDS" : "?";
+                        int plugged = (conn & did) ? 1 : 0;
+                        printf("  disp 0x%04x: OR rc=%d status=0x%x type=%s proto=%s idx=%u loc=%u  %s\n",
+                               did, orc, ost, tn, pn, ix, lo, plugged ? "ПОДКЛЮЧЁН" : "нет");
+                        if (plugged) {
+                            static uint8_t edid[256]; uint32_t esz=0, est=0xffffffffu;
+                            int erc = nv_gsp_disp_get_edid(&ch, hcli, hdisp, did, edid, sizeof(edid), &esz, &est);
+                            printf("    EDID rc=%d status=0x%x size=%u", erc, est, esz);
+                            if (erc==NV_GSP_RM_OK && est==0 && esz>=8)
+                                printf(" magic=%02x%02x%02x%02x%02x%02x%02x%02x",
+                                       edid[0],edid[1],edid[2],edid[3],edid[4],edid[5],edid[6],edid[7]);
+                            printf("\n");
+                        }
+                    }
+                }
             }
         }
     }

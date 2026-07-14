@@ -109,11 +109,83 @@ static void test_supported(void)
     CHECK(ld32(cp + NV_RM_CTRL_CMD_OFF) == NV0073_CTRL_CMD_SYSTEM_GET_SUPPORTED, "cmd == GET_SUPPORTED");
 }
 
+static void test_or_get_info(void)
+{
+    printf("[test_or_get_info]\n");
+    nv_gsp_rpc_chan ch; chan_init(&ch);
+    uint8_t rep[NV_RM_CTRL_HDR_SIZE + NV0073_OR_GET_INFO_PARAMS_SIZE]; memset(rep, 0, sizeof(rep));
+    uint8_t *pp = rep + NV_RM_CTRL_HDR_SIZE;
+    st32(pp + NV0073_OR_GI_TYPE_OFF, NV0073_OR_TYPE_SOR);
+    st32(pp + NV0073_OR_GI_PROTOCOL_OFF, NV0073_OR_PROTOCOL_SOR_DP_A);
+    st32(pp + NV0073_OR_GI_INDEX_OFF, 2);
+    st32(pp + NV0073_OR_GI_LOCATION_OFF, 0);
+    put_msg(g_shm, &ch.lay, 0, NV_VGPU_MSG_FUNCTION_GSP_RM_CONTROL, 0, rep, sizeof(rep), 1);
+    set_msgq_wptr(g_shm, &ch.lay, 1);
+
+    uint32_t type=0, proto=0, idx=0, loc=9, st=0xffffffffu;
+    int rc = nv_gsp_disp_or_get_info(&ch, NV_GSP_RM_CLIENT_HANDLE, NV_GSP_RM_DISPCOMMON_HANDLE,
+                                     0x100, &type, &proto, &idx, &loc, &st);
+    CHECK(rc == NV_GSP_RM_OK && st == 0, "or_get_info OK");
+    CHECK(type == NV0073_OR_TYPE_SOR, "type == SOR");
+    CHECK(proto == NV0073_OR_PROTOCOL_SOR_DP_A, "protocol == DP_A");
+    CHECK(idx == 2, "index == 2");
+    const uint8_t *cp = g_shm + ch.lay.cmdq_off + NV_GSP_QUEUE_ENTRYOFF + 0 + NV_GSP_RPC_PAYLOAD_OFF;
+    CHECK(ld32(cp + NV_RM_CTRL_CMD_OFF) == NV0073_CTRL_CMD_SPECIFIC_OR_GET_INFO, "cmd == OR_GET_INFO");
+    CHECK(ld32(cp + NV_RM_CTRL_HDR_SIZE + NV0073_OR_GI_DISPLAYID_OFF) == 0x100, "displayId в запросе");
+    CHECK(ld32(cp + NV_RM_CTRL_PARAMSIZE_OFF) == NV0073_OR_GET_INFO_PARAMS_SIZE, "paramsSize == 56");
+}
+
+static void test_connect_state(void)
+{
+    printf("[test_connect_state]\n");
+    nv_gsp_rpc_chan ch; chan_init(&ch);
+    uint8_t rep[NV_RM_CTRL_HDR_SIZE + NV0073_CONNECT_STATE_PARAMS_SIZE]; memset(rep, 0, sizeof(rep));
+    st32(rep + NV_RM_CTRL_HDR_SIZE + NV0073_CONNECT_STATE_MASK_OFF, 0x100);  /* подключён 0x100 */
+    put_msg(g_shm, &ch.lay, 0, NV_VGPU_MSG_FUNCTION_GSP_RM_CONTROL, 0, rep, sizeof(rep), 1);
+    set_msgq_wptr(g_shm, &ch.lay, 1);
+
+    uint32_t conn = 0xffff, st = 0xffffffffu;
+    int rc = nv_gsp_disp_get_connect_state(&ch, NV_GSP_RM_CLIENT_HANDLE, NV_GSP_RM_DISPCOMMON_HANDLE,
+                                           0x7f00, &conn, &st);
+    CHECK(rc == NV_GSP_RM_OK && st == 0, "connect_state OK");
+    CHECK(conn == 0x100, "connected mask == 0x100");
+    const uint8_t *cp = g_shm + ch.lay.cmdq_off + NV_GSP_QUEUE_ENTRYOFF + 0 + NV_GSP_RPC_PAYLOAD_OFF;
+    CHECK(ld32(cp + NV_RM_CTRL_CMD_OFF) == NV0073_CTRL_CMD_SYSTEM_GET_CONNECT_STATE, "cmd == CONNECT_STATE");
+    CHECK(ld32(cp + NV_RM_CTRL_HDR_SIZE + NV0073_CONNECT_STATE_MASK_OFF) == 0x7f00, "IN displayMask == 0x7f00");
+}
+
+static void test_edid(void)
+{
+    printf("[test_edid]\n");
+    nv_gsp_rpc_chan ch; chan_init(&ch);
+    static uint8_t rep[NV_RM_CTRL_HDR_SIZE + NV0073_EDID_V2_PARAMS_SIZE]; memset(rep, 0, sizeof(rep));
+    uint8_t *pp = rep + NV_RM_CTRL_HDR_SIZE;
+    st32(pp + NV0073_EDID_BUFSIZE_OFF, 128);
+    /* EDID magic 00 FF FF FF FF FF FF 00 в начале буфера */
+    static const uint8_t magic[8] = {0x00,0xff,0xff,0xff,0xff,0xff,0xff,0x00};
+    memcpy(pp + NV0073_EDID_BUFFER_OFF, magic, 8);
+    put_msg(g_shm, &ch.lay, 0, NV_VGPU_MSG_FUNCTION_GSP_RM_CONTROL, 0, rep, sizeof(rep), 1);
+    set_msgq_wptr(g_shm, &ch.lay, 1);
+
+    static uint8_t edid[256]; uint32_t sz = 0, st = 0xffffffffu;
+    int rc = nv_gsp_disp_get_edid(&ch, NV_GSP_RM_CLIENT_HANDLE, NV_GSP_RM_DISPCOMMON_HANDLE,
+                                  0x100, edid, sizeof(edid), &sz, &st);
+    CHECK(rc == NV_GSP_RM_OK && st == 0, "get_edid OK");
+    CHECK(sz == 128, "bufferSize == 128");
+    CHECK(memcmp(edid, magic, 8) == 0, "EDID magic скопирован");
+    const uint8_t *cp = g_shm + ch.lay.cmdq_off + NV_GSP_QUEUE_ENTRYOFF + 0 + NV_GSP_RPC_PAYLOAD_OFF;
+    CHECK(ld32(cp + NV_RM_CTRL_CMD_OFF) == NV0073_CTRL_CMD_SPECIFIC_GET_EDID_V2, "cmd == GET_EDID_V2");
+    CHECK(ld32(cp + NV_RM_CTRL_PARAMSIZE_OFF) == NV0073_EDID_V2_PARAMS_SIZE, "paramsSize == 2064");
+}
+
 int main(void)
 {
     test_disp_common_alloc();
     test_num_heads();
     test_supported();
+    test_or_get_info();
+    test_connect_state();
+    test_edid();
     printf(failed ? "\n=== gsp_disp_test: ЕСТЬ ПРОВАЛЫ ===\n" : "\n=== gsp_disp_test: ВСЕ ТЕСТЫ ПРОШЛИ ===\n");
     return failed ? 1 : 0;
 }
