@@ -213,10 +213,12 @@ int nv_gsp_rm_control(nv_gsp_rpc_chan *ch, uint32_t hClient, uint32_t hObject, u
 {
     if (!ch) return NV_GSP_RM_ERR_ARG;
 
-    /* req = rpc_gsp_rm_control_v03_00 (шапка 24б) + params. */
-    static uint8_t req[NV_RM_CTRL_HDR_SIZE + 512u];
-    static uint8_t rep[NV_RM_CTRL_HDR_SIZE + 512u];
-    if (params_len > 512u) return NV_GSP_RM_ERR_BOUNDS;
+    /* req = rpc_gsp_rm_control_v03_00 (шапка 24б) + params. Ёмкость 3584 покрывает
+       крупные control-params (NV2080_CTRL_FIFO_GET_DEVICE_INFO_TABLE=3212, слой 4);
+       элемент cmdq остаётся одностраничным (80+24+3212 < 4096). */
+    static uint8_t req[NV_RM_CTRL_HDR_SIZE + 3584u];
+    static uint8_t rep[NV_RM_CTRL_HDR_SIZE + 3584u];
+    if (params_len > 3584u) return NV_GSP_RM_ERR_BOUNDS;
     uint32_t req_len = NV_RM_CTRL_HDR_SIZE + params_len;
     for (uint32_t i = 0; i < req_len; i++) req[i] = 0;
     st32(req + NV_RM_CTRL_HCLIENT_OFF,   hClient);

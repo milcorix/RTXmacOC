@@ -197,9 +197,55 @@ static void test_bind_schedule(void)
     CHECK((cp1 + NV_RM_CTRL_HDR_SIZE)[0] == 1, "SCHEDULE.bEnable == 1");
 }
 
+/* --- тест device-info-table: framing + парс синтетической таблицы (2 движка) --- */
+static void test_device_info(void)
+{
+    printf("[test_device_info]\n");
+    nv_gsp_rpc_chan ch; chan_init(&ch);
+
+    /* ответ RM_CONTROL: шапка 24б (status=0) + PARAMS (3212б) с 2 движками. */
+    static uint8_t rep[NV_RM_CTRL_HDR_SIZE + NV_FIFO_DEVINFO_PARAMS_SIZE];
+    memset(rep, 0, sizeof(rep));
+    uint8_t *pp = rep + NV_RM_CTRL_HDR_SIZE;
+    st32(pp + NV_FIFO_DEVINFO_NUMENTRIES_OFF, 2);
+    /* entry0 = GR0: rm_engine_type=1, runlist=0, pri_base=0x90000, eng_desc=0x11 */
+    uint8_t *e0 = pp + NV_FIFO_DEVINFO_ENTRIES_OFF;
+    st32(e0 + ENGINE_INFO_TYPE_ENG_DESC * 4u, 0x11);
+    st32(e0 + ENGINE_INFO_TYPE_RM_ENGINE_TYPE * 4u, RM_ENGINE_TYPE_GR0);
+    st32(e0 + ENGINE_INFO_TYPE_RUNLIST * 4u, 0);
+    st32(e0 + ENGINE_INFO_TYPE_RUNLIST_PRI_BASE * 4u, 0x90000);
+    /* entry1 = COPY0: rm_engine_type=9, runlist=2, pri_base=0x92000 */
+    uint8_t *e1 = pp + NV_FIFO_DEVINFO_ENTRIES_OFF + NV_FIFO_DEVINFO_ENTRY_SIZE;
+    st32(e1 + ENGINE_INFO_TYPE_ENG_DESC * 4u, 0x22);
+    st32(e1 + ENGINE_INFO_TYPE_RM_ENGINE_TYPE * 4u, RM_ENGINE_TYPE_COPY0);
+    st32(e1 + ENGINE_INFO_TYPE_RUNLIST * 4u, 2);
+    st32(e1 + ENGINE_INFO_TYPE_RUNLIST_PRI_BASE * 4u, 0x92000);
+    put_msg(g_shm, &ch.lay, 0, NV_VGPU_MSG_FUNCTION_GSP_RM_CONTROL, 0, rep, sizeof(rep), 1);
+    set_msgq_wptr(g_shm, &ch.lay, 1);
+
+    nv_gsp_fifo_devinfo di; uint32_t st = 0xffffffffu;
+    int rc = nv_gsp_fifo_get_device_info(&ch, NV_GSP_RM_CLIENT_HANDLE,
+                                         NV_GSP_RM_SUBDEV_HANDLE, &di, &st);
+    CHECK(rc == NV_GSP_RM_OK && st == 0, "device_info OK");
+    CHECK(di.count == 2, "count == 2");
+    CHECK(di.engines[0].rm_engine_type == RM_ENGINE_TYPE_GR0, "engine[0] == GR0");
+    CHECK(di.engines[1].rm_engine_type == RM_ENGINE_TYPE_COPY0, "engine[1] == COPY0");
+    CHECK(di.engines[1].runlist == 2, "engine[1].runlist == 2");
+    CHECK(di.engines[1].runlist_pri_base == 0x92000, "engine[1].pri_base == 0x92000");
+    CHECK(nv_gsp_fifo_find_engine(&di, RM_ENGINE_TYPE_COPY0) == 1, "find COPY0 → индекс 1");
+    CHECK(nv_gsp_fifo_find_engine(&di, RM_ENGINE_TYPE_NULL) == -1, "find отсутствующего → -1");
+    /* framing: cmd == FIFO_GET_DEVICE_INFO_TABLE, hObject == subdevice */
+    const uint8_t *cp = g_shm + ch.lay.cmdq_off + NV_GSP_QUEUE_ENTRYOFF + 0 + NV_GSP_RPC_PAYLOAD_OFF;
+    CHECK(ld32(cp + NV_RM_CTRL_CMD_OFF) == NV2080_CTRL_CMD_FIFO_GET_DEVICE_INFO_TABLE,
+          "cmd == FIFO_GET_DEVICE_INFO_TABLE (0x20801112)");
+    CHECK(ld32(cp + NV_RM_CTRL_HOBJECT_OFF) == NV_GSP_RM_SUBDEV_HANDLE, "hObject == subdevice");
+    CHECK(ld32(cp + NV_RM_CTRL_PARAMSIZE_OFF) == NV_FIFO_DEVINFO_PARAMS_SIZE, "paramsSize == 3212");
+}
+
 int main(void)
 {
     test_layout();
+    test_device_info();
     test_channel_alloc();
     test_bind_schedule();
     printf(failed ? "\n=== gsp_fifo_test: ЕСТЬ ПРОВАЛЫ ===\n" : "\n=== gsp_fifo_test: ВСЕ ТЕСТЫ ПРОШЛИ ===\n");

@@ -35,6 +35,7 @@
 #include "../driver/gsp/gsp_rpc.h"
 #include "../driver/gsp/gsp_rm.h"
 #include "../driver/gsp/gmmu.h"
+#include "../driver/gsp/gsp_fifo.h"
 #include "../driver/gsp/fw_blob.h"
 
 #define TIMEOUT_US (2u * 1000u * 1000u)
@@ -475,6 +476,7 @@ static int run(const nv_mmio_t *io, struct arena *ar, const char *bdf)
        GET_GSP_STATIC_INFO (карта FB-регионов), затем цепочку RM client→device→subdevice. */
     int l3_static_ok = 0, l3_chain_ok = 0, l3_ctrl_ok = 0, l3_vaspace_ok = 0;
     int l3_vram_ok = 0, l3_map_ok = 0;
+    int l4_devinfo_ok = 0, l4_ce_engtype = -1;
     if (got) {
         nv_gsp_rpc_chan ch;
         memset(&ch, 0, sizeof(ch));
@@ -625,6 +627,40 @@ static int run(const nv_mmio_t *io, struct arena *ar, const char *bdf)
                l3_static_ok?"OK":"нет", l3_chain_ok?"OK":"нет",
                l3_ctrl_ok?"OK":"нет", l3_vaspace_ok?"OK":"нет",
                l3_vram_ok?"OK":"нет", l3_map_ok?"OK":"нет");
+
+        /* ===================== СЛОЙ 4 (проход A0): таблица движков =====================
+           FIFO_GET_DEVICE_INFO_TABLE на нашем subdevice → список движков GPU
+           (GR/CE/NVDEC/...) с RM_ENGINE_TYPE/runlist. Из него берём engineType
+           для будущего канала (A2). Порт r535_fifo_runl_ctor. */
+        if (l3_chain_ok) {
+            nv_gsp_fifo_devinfo di;
+            uint32_t dst = 0xffffffffu;
+            int drc = nv_gsp_fifo_get_device_info(&ch, hcli, hsub, &di, &dst);
+            if (drc == NV_GSP_RM_OK && dst == 0) {
+                l4_devinfo_ok = 1;
+                printf("СЛОЙ 4 A0: FIFO device-info OK — движков: %u\n", di.count);
+                for (uint32_t i = 0; i < di.count; i++) {
+                    uint32_t rt = di.engines[i].rm_engine_type;
+                    const char *nm = "?";
+                    if (rt == RM_ENGINE_TYPE_GR0) nm = "GR0";
+                    else if (rt >= RM_ENGINE_TYPE_COPY0 && rt <= RM_ENGINE_TYPE_COPY9) nm = "COPYx";
+                    else if (rt == RM_ENGINE_TYPE_SW) nm = "SW";
+                    printf("  engn[%02u] rm_type=0x%02x(%s) runlist=%u pri_base=0x%x eng_desc=0x%x\n",
+                           i, rt, nm, di.engines[i].runlist,
+                           di.engines[i].runlist_pri_base, di.engines[i].eng_desc);
+                }
+                int ce = nv_gsp_fifo_find_engine(&di, RM_ENGINE_TYPE_COPY0);
+                if (ce >= 0) {
+                    l4_ce_engtype = (int)di.engines[ce].rm_engine_type;
+                    printf("СЛОЙ 4 A0: CE0 найден — engineType=0x%x runlist=%u (для канала A2)\n",
+                           l4_ce_engtype, di.engines[ce].runlist);
+                } else {
+                    printf("СЛОЙ 4 A0: COPY0 в таблице не найден\n");
+                }
+            } else {
+                printf("СЛОЙ 4 A0: FIFO device-info FAIL rc=%d status=0x%x\n", drc, dst);
+            }
+        }
     }
 
     /* --- диагностика: тронул ли GSP очереди/логи --- */
@@ -671,6 +707,9 @@ static int run(const nv_mmio_t *io, struct arena *ar, const char *bdf)
             printf("*** СЛОЙ 3 (проход C): регистрация VRAM-объекта (NV01_MEMORY_LIST_FBMEM) — OK ***\n");
         if (l3_map_ok)
             printf("*** СЛОЙ 3 (проход D): прямой GMMU — page-tables во VRAM + COPY_SERVER_RESERVED_PDES (GSP прошил PDB) ***\n");
+        if (l4_devinfo_ok)
+            printf("*** СЛОЙ 4 (проход A0): FIFO device-info прочитан — движки GPU перечислены%s ***\n",
+                   (l4_ce_engtype >= 0) ? ", CE0 найден" : "");
         return 0;
     }
     if (brc==NV_OK && mb0==0 && active){

@@ -19,6 +19,54 @@ static void wr_memdesc(uint8_t *p, uint32_t off, uint64_t base, uint64_t size,
     st32(p + off + NV_MEMDESC_CACHEATTRIB_OFF, cacheattrib);
 }
 
+static uint32_t ld32(const uint8_t *p)
+{ return (uint32_t)p[0]|((uint32_t)p[1]<<8)|((uint32_t)p[2]<<16)|((uint32_t)p[3]<<24); }
+
+int nv_gsp_fifo_get_device_info(nv_gsp_rpc_chan *ch, uint32_t hClient, uint32_t hSubdevice,
+                                nv_gsp_fifo_devinfo *out, uint32_t *status)
+{
+    if (!ch || !out) return NV_GSP_RM_ERR_ARG;
+    for (unsigned i = 0; i < sizeof(*out); i++) ((uint8_t *)out)[i] = 0;
+
+    /* NV2080_CTRL_FIFO_GET_DEVICE_INFO_TABLE_PARAMS (3212б): baseIndex=0 (первая пачка). */
+    static uint8_t p[NV_FIFO_DEVINFO_PARAMS_SIZE];
+    for (unsigned i = 0; i < sizeof(p); i++) p[i] = 0;
+    st32(p + NV_FIFO_DEVINFO_BASEINDEX_OFF, 0u);
+
+    uint32_t st = 0xffffffffu;
+    int rc = nv_gsp_rm_control(ch, hClient, hSubdevice,
+                               NV2080_CTRL_CMD_FIFO_GET_DEVICE_INFO_TABLE,
+                               p, NV_FIFO_DEVINFO_PARAMS_SIZE, &st);
+    if (status) *status = st;
+    if (rc != NV_GSP_RM_OK) return rc;
+    if (st != 0) return NV_GSP_RM_ERR_BOUNDS;
+
+    uint32_t n = ld32(p + NV_FIFO_DEVINFO_NUMENTRIES_OFF);
+    if (n > NV_FIFO_DEVINFO_MAX_ENTRIES) n = NV_FIFO_DEVINFO_MAX_ENTRIES;  /* самозащита */
+    out->count = n;
+    for (uint32_t i = 0; i < n; i++) {
+        const uint8_t *e = p + NV_FIFO_DEVINFO_ENTRIES_OFF
+                         + (size_t)i * NV_FIFO_DEVINFO_ENTRY_SIZE;   /* engineData[16]@0 */
+        out->engines[i].eng_desc =
+            ld32(e + ENGINE_INFO_TYPE_ENG_DESC * 4u);
+        out->engines[i].rm_engine_type =
+            ld32(e + ENGINE_INFO_TYPE_RM_ENGINE_TYPE * 4u);
+        out->engines[i].runlist =
+            ld32(e + ENGINE_INFO_TYPE_RUNLIST * 4u);
+        out->engines[i].runlist_pri_base =
+            ld32(e + ENGINE_INFO_TYPE_RUNLIST_PRI_BASE * 4u);
+    }
+    return NV_GSP_RM_OK;
+}
+
+int nv_gsp_fifo_find_engine(const nv_gsp_fifo_devinfo *di, uint32_t rm_engine_type)
+{
+    if (!di) return -1;
+    for (uint32_t i = 0; i < di->count; i++)
+        if (di->engines[i].rm_engine_type == rm_engine_type) return (int)i;
+    return -1;
+}
+
 int nv_gsp_rm_channel_alloc(nv_gsp_rpc_chan *ch, const nv_gsp_chan_cfg *cfg,
                             uint32_t *out_channel, uint32_t *status)
 {

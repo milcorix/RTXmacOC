@@ -98,6 +98,59 @@ typedef struct {
     int      priv;          /* привилегированный канал (kernel) */
 } nv_gsp_chan_cfg;
 
+/* --- Проход A0: таблица движков (ctrl2080fifo.h) ---
+ * NV2080_CTRL_CMD_FIFO_GET_DEVICE_INFO_TABLE на subdevice → список движков GPU с
+ * их RM_ENGINE_TYPE/runlist. Из него берём engineType для канала (как r535_fifo_runl_ctor). */
+#define NV2080_CTRL_CMD_FIFO_GET_DEVICE_INFO_TABLE  0x20801112u
+#define NV_FIFO_DEVINFO_MAX_ENTRIES        32u   /* MAX_ENTRIES за один вызов */
+#define NV_FIFO_DEVINFO_DATA_TYPES         16u   /* engineData[16] */
+#define NV_FIFO_DEVINFO_ENTRY_SIZE        100u   /* engineData[16]+pbdma+name */
+/* NV2080_CTRL_FIFO_GET_DEVICE_INFO_TABLE_PARAMS: baseIndex@0 numEntries@4 bMore@8
+   entries[32]@12 (по 100б). */
+#define NV_FIFO_DEVINFO_BASEINDEX_OFF       0u
+#define NV_FIFO_DEVINFO_NUMENTRIES_OFF      4u
+#define NV_FIFO_DEVINFO_BMORE_OFF           8u
+#define NV_FIFO_DEVINFO_ENTRIES_OFF        12u
+#define NV_FIFO_DEVINFO_PARAMS_SIZE  (NV_FIFO_DEVINFO_ENTRIES_OFF + \
+                                      NV_FIFO_DEVINFO_MAX_ENTRIES * NV_FIFO_DEVINFO_ENTRY_SIZE) /* 3212 */
+
+/* Индексы в engineData[16] (g_kernel_fifo_nvoc.h ENGINE_INFO_TYPE). */
+#define ENGINE_INFO_TYPE_ENG_DESC          0u
+#define ENGINE_INFO_TYPE_RM_ENGINE_TYPE    2u
+#define ENGINE_INFO_TYPE_RUNLIST           3u
+#define ENGINE_INFO_TYPE_RUNLIST_PRI_BASE 11u
+
+/* RM_ENGINE_TYPE (gpu_engine_type.h); совпадает с NV2080_ENGINE_TYPE (унифицированы). */
+#define RM_ENGINE_TYPE_NULL    0x00u
+#define RM_ENGINE_TYPE_GR0     0x01u
+#define RM_ENGINE_TYPE_COPY0   0x09u
+#define RM_ENGINE_TYPE_COPY9   0x12u
+#define RM_ENGINE_TYPE_SW      0x2cu
+
+/* Один распарсенный движок. */
+typedef struct {
+    uint32_t eng_desc;         /* ENG_DESC */
+    uint32_t rm_engine_type;   /* RM_ENGINE_TYPE (== engineType для канала) */
+    uint32_t runlist;          /* RUNLIST id */
+    uint32_t runlist_pri_base; /* RUNLIST_PRI_BASE */
+} nv_gsp_fifo_engn;
+
+typedef struct {
+    uint32_t count;
+    nv_gsp_fifo_engn engines[NV_FIFO_DEVINFO_MAX_ENTRIES];
+} nv_gsp_fifo_devinfo;
+
+/*
+ * Проход A0: прочитать таблицу движков (baseIndex=0) на hSubdevice, разобрать
+ * engineData каждого движка (ENG_DESC/RM_ENGINE_TYPE/RUNLIST/PRI_BASE) в *out.
+ * *status ← статус RM. Порт r535_fifo_runl_ctor (FIFO_GET_DEVICE_INFO_TABLE).
+ */
+int nv_gsp_fifo_get_device_info(nv_gsp_rpc_chan *ch, uint32_t hClient, uint32_t hSubdevice,
+                                nv_gsp_fifo_devinfo *out, uint32_t *status);
+
+/* Найти первый движок с заданным RM_ENGINE_TYPE (напр. COPY0). Возврат индекс или -1. */
+int nv_gsp_fifo_find_engine(const nv_gsp_fifo_devinfo *di, uint32_t rm_engine_type);
+
 /*
  * Проход A2: аллокация канала GPFIFO (AMPERE_CHANNEL_GPFIFO_A) под device.
  * Строит NV_CHANNEL_ALLOC_PARAMS из cfg, шлёт GSP_RM_ALLOC. hObject=0xf1f00000|chid.
