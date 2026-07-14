@@ -178,6 +178,50 @@ static void test_edid(void)
     CHECK(ld32(cp + NV_RM_CTRL_PARAMSIZE_OFF) == NV0073_EDID_V2_PARAMS_SIZE, "paramsSize == 2064");
 }
 
+static uint64_t ld64(const uint8_t *p){ uint64_t v=0; for(int i=0;i<8;i++) v|=(uint64_t)p[i]<<(8*i); return v; }
+
+static void test_write_inst_mem(void)
+{
+    printf("[test_write_inst_mem]\n");
+    nv_gsp_rpc_chan ch; chan_init(&ch);
+    uint8_t rep[NV_RM_CTRL_HDR_SIZE + NV_DISP_WRINST_PARAMS_SIZE]; memset(rep, 0, sizeof(rep));
+    put_msg(g_shm, &ch.lay, 0, NV_VGPU_MSG_FUNCTION_GSP_RM_CONTROL, 0, rep, sizeof(rep), 1);
+    set_msgq_wptr(g_shm, &ch.lay, 1);
+
+    uint32_t st = 0xffffffffu;
+    int rc = nv_gsp_disp_write_inst_mem(&ch, 0xc2000005u, 0xabcd2080u, 0x13400000ull,
+                                        NV_DISP_INST_SIZE, &st);
+    CHECK(rc == NV_GSP_RM_OK && st == 0, "write_inst_mem OK");
+    const uint8_t *cp = g_shm + ch.lay.cmdq_off + NV_GSP_QUEUE_ENTRYOFF + 0 + NV_GSP_RPC_PAYLOAD_OFF;
+    CHECK(ld32(cp + NV_RM_CTRL_CMD_OFF) == NV2080_CTRL_CMD_INTERNAL_DISPLAY_WRITE_INST_MEM, "cmd == WRITE_INST_MEM");
+    CHECK(ld32(cp + NV_RM_CTRL_HCLIENT_OFF) == 0xc2000005u, "hClient == internal");
+    CHECK(ld32(cp + NV_RM_CTRL_HOBJECT_OFF) == 0xabcd2080u, "hObject == internal subdevice");
+    const uint8_t *pp = cp + NV_RM_CTRL_HDR_SIZE;
+    CHECK(ld64(pp + NV_DISP_WRINST_PHYS_OFF) == 0x13400000ull, "instMemPhysAddr");
+    CHECK(ld64(pp + NV_DISP_WRINST_SIZE_OFF) == NV_DISP_INST_SIZE, "instMemSize == 64K");
+    CHECK(ld32(pp + NV_DISP_WRINST_ADDRSPACE_OFF) == NV_RM_ADDR_FBMEM, "addrSpace == FBMEM");
+    CHECK(ld32(pp + NV_DISP_WRINST_CACHEATTR_OFF) == NV_MEMORY_WRITECOMBINED, "cacheAttr == WC");
+}
+
+static void test_disp_root_alloc(void)
+{
+    printf("[test_disp_root_alloc]\n");
+    nv_gsp_rpc_chan ch; chan_init(&ch);
+    uint8_t rep[NV_RM_ALLOC_HDR_SIZE]; memset(rep, 0, sizeof(rep));
+    put_msg(g_shm, &ch.lay, 0, NV_VGPU_MSG_FUNCTION_GSP_RM_ALLOC, 0, rep, sizeof(rep), 1);
+    set_msgq_wptr(g_shm, &ch.lay, 1);
+
+    uint32_t hroot = 0, st = 0xffffffffu;
+    int rc = nv_gsp_disp_root_alloc(&ch, NV_GSP_RM_CLIENT_HANDLE, NV_GSP_RM_DEVICE_HANDLE,
+                                    AD102_DISP, &hroot, &st);
+    CHECK(rc == NV_GSP_RM_OK && st == 0, "disp_root_alloc OK");
+    CHECK(hroot == NV_GSP_RM_DISPROOT_HANDLE, "хэндл == 0xc7700000 (AD102_DISP<<16)");
+    const uint8_t *al = g_shm + ch.lay.cmdq_off + NV_GSP_QUEUE_ENTRYOFF + 0 + NV_GSP_RPC_PAYLOAD_OFF;
+    CHECK(ld32(al + NV_RM_ALLOC_HCLASS_OFF) == AD102_DISP, "hClass == AD102_DISP");
+    CHECK(ld32(al + NV_RM_ALLOC_HOBJECT_OFF) == NV_GSP_RM_DISPROOT_HANDLE, "hObject == class<<16");
+    CHECK(ld32(al + NV_RM_ALLOC_PARAMSIZE_OFF) == 0, "paramsSize == 0");
+}
+
 int main(void)
 {
     test_disp_common_alloc();
@@ -186,6 +230,8 @@ int main(void)
     test_or_get_info();
     test_connect_state();
     test_edid();
+    test_write_inst_mem();
+    test_disp_root_alloc();
     printf(failed ? "\n=== gsp_disp_test: ЕСТЬ ПРОВАЛЫ ===\n" : "\n=== gsp_disp_test: ВСЕ ТЕСТЫ ПРОШЛИ ===\n");
     return failed ? 1 : 0;
 }

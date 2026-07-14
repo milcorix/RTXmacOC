@@ -821,6 +821,23 @@ static int run(const nv_mmio_t *io, struct arena *ar, const char *bdf)
                             printf("\n");
                         }
                     }
+
+                    /* --- СЛОЙ 5 C.1: RAMIN дисплея + display root класс ---
+                       Обнулить 64 КиБ VRAM под RAMIN (PRAMIN) → WRITE_INST_MEM на
+                       внутренний subdevice GSP → alloc AD102_DISP. Порт r535_disp_init. */
+                    uint64_t disp_inst = 0x13400000ull;        /* 64К-выровнено, в usable FB */
+                    uint64_t win = ~0ull;
+                    nv_pramin_fill(io, &win, disp_inst, NV_DISP_INST_SIZE, 0u);
+                    uint32_t wist = 0xffffffffu;
+                    int wirc = nv_gsp_disp_write_inst_mem(&ch, si.h_client, si.h_subdevice,
+                                                          disp_inst, NV_DISP_INST_SIZE, &wist);
+                    printf("СЛОЙ 5 C.1: WRITE_INST_MEM rc=%d status=0x%x inst=0x%llx\n",
+                           wirc, wist, (unsigned long long)disp_inst);
+                    uint32_t hroot = 0, rst = 0xffffffffu;
+                    int rrc = nv_gsp_disp_root_alloc(&ch, hcli, hdev, AD102_DISP, &hroot, &rst);
+                    printf("СЛОЙ 5 C.1: AD102_DISP root rc=%d status=0x%x handle=0x%08x%s\n",
+                           rrc, rst, hroot,
+                           (rrc==NV_GSP_RM_OK && rst==0) ? "  ★ DISPLAY ROOT ★" : "  (не OK)");
                 }
             }
         }

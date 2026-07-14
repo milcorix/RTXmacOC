@@ -119,3 +119,32 @@ int nv_gsp_disp_get_edid(nv_gsp_rpc_chan *ch, uint32_t hClient, uint32_t hDispCo
     if (out_size) *out_size = sz;
     return NV_GSP_RM_OK;
 }
+
+static void st64(uint8_t *p, uint64_t v)
+{ for (int i=0;i<8;i++) p[i]=(uint8_t)(v>>(8*i)); }
+
+int nv_gsp_disp_write_inst_mem(nv_gsp_rpc_chan *ch, uint32_t hIntClient, uint32_t hIntSubdevice,
+                               uint64_t inst_phys, uint64_t inst_size, uint32_t *status)
+{
+    if (!ch) return NV_GSP_RM_ERR_ARG;
+    uint8_t p[NV_DISP_WRINST_PARAMS_SIZE];
+    for (unsigned i = 0; i < sizeof(p); i++) p[i] = 0;
+    st64(p + NV_DISP_WRINST_PHYS_OFF,      inst_phys);
+    st64(p + NV_DISP_WRINST_SIZE_OFF,      inst_size);
+    st32(p + NV_DISP_WRINST_ADDRSPACE_OFF, NV_RM_ADDR_FBMEM);
+    st32(p + NV_DISP_WRINST_CACHEATTR_OFF, NV_MEMORY_WRITECOMBINED);
+    /* Контрол на внутреннем subdevice GSP (privileged internal client). */
+    return nv_gsp_rm_control(ch, hIntClient, hIntSubdevice,
+                             NV2080_CTRL_CMD_INTERNAL_DISPLAY_WRITE_INST_MEM,
+                             p, sizeof(p), status);
+}
+
+int nv_gsp_disp_root_alloc(nv_gsp_rpc_chan *ch, uint32_t hClient, uint32_t hDevice,
+                           uint32_t dispClass, uint32_t *out_root, uint32_t *status)
+{
+    if (!ch) return NV_GSP_RM_ERR_ARG;
+    uint32_t h = dispClass << 16;   /* напр. AD102_DISP(0xc770)<<16 = 0xc7700000 */
+    int rc = nv_gsp_rm_alloc(ch, hClient, hDevice, h, dispClass, NULL, 0, status);
+    if (rc == NV_GSP_RM_OK && out_root) *out_root = h;
+    return rc;
+}

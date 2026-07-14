@@ -39,13 +39,21 @@
    (подключён ли монитор), `NV0073_CTRL_CMD_SPECIFIC_GET_EDID_V2` (EDID-байты).
    Для DP — `NV0073_CTRL_CMD_DP_GET_CAPS` (max link rate, MST).
 
-**5C — modeset + scanout (метрика 🟢 = картинка на мониторе, нужен монитор+FB):**
-5. RAMIN (inst 0x10000 во VRAM) + `NV2080_CTRL_CMD_INTERNAL_DISPLAY_WRITE_INST_MEM`
-   (на внутренний subdevice GSP, hInternalSubdevice из GET_STATIC_INFO).
-6. `GSP_RM_ALLOC` display root класс **`AD102_DISP (0xC770)`** (Ada) под device.
-7. Core/window/cursor каналы дисплея (классы `*7d/*7e/*7b/*7a`), framebuffer-surface
-   во VRAM (наш GMMU), attach к head, для DP — link training (`NV0073_CTRL_CMD_DP_CTRL`),
-   для HDMI — `SPECIFIC_SET_HDMI_ENABLE`. Выставить mode из EDID, включить scanout.
+**5C — modeset + scanout (метрика 🟢 = картинка на мониторе, нужен монитор+FB).**
+Разбит на под-шаги:
+- **5C.1** (🔧 framing): RAMIN (inst 0x10000 во VRAM, обнулить через PRAMIN) +
+  `NV2080_CTRL_CMD_INTERNAL_DISPLAY_WRITE_INST_MEM (0x20800a49)` на **внутренний**
+  subdevice GSP (`hInternalClient/Subdevice` из GET_STATIC_INFO: 0xc2000005/0xabcd2080)
+  → `GSP_RM_ALLOC` display root **`AD102_DISP (0xC770)`** под device (hObject=class<<16,
+  params 0). Метрика: WRITE_INST_MEM + root alloc = NV_OK.
+- **5C.2**: core/window/cursor каналы дисплея (классы `*7d/*7e/*7b/*7a` → для Ada
+  `NVC77D/C77E/C77B/C77A`), display-pushbuffer (`INTERNAL_DISPLAY_CHANNEL_PUSHBUFFER`),
+  `NV50VAIO_CHANNELDMA/PIO_ALLOCATION_PARAMETERS`.
+- **5C.3**: SOR acquire (`NV0073_CTRL_CMD_DFP_ASSIGN_SOR`) + для DP link training
+  (`NV0073_CTRL_CMD_DP_CTRL`), для HDMI `SPECIFIC_SET_HDMI_ENABLE`.
+- **5C.4**: framebuffer-surface во VRAM (наш GMMU) + методы core/window channel
+  (SetRasterSize/SetContextDmaIso/SetSurfaceAddress/Update) → выставить mode из EDID,
+  включить scanout = картинка.
 
 ---
 
@@ -91,8 +99,10 @@ TMDS_A/B, DP_A/B (idx=~0 — назначается при acquire). `CONNECT_ST
 (два монитора: 0x100 TMDS_A + 0x200 DP_B). `GET_EDID_V2` для обоих → `size=384`, magic
 `00ffffffffffff00` (валидный EDID по DDC). Карта под нашим драйвером **видит мониторы и
 читает их EDID**. Пруф: `docs/hw-dumps/20260714-rtx4070s-layer5-B-edid-OK.log`.
-**Дальше:** 5C — modeset+scanout (display root `AD102_DISP 0xC770` + inst-mem + core/wndw
-каналы + framebuffer + link training + выставить mode из EDID = картинка на мониторе).
+**5C.1 🔧 framing 2026-07-15:** `nv_gsp_disp_write_inst_mem` (RAMIN дисплея через
+WRITE_INST_MEM на внутр. subdevice GSP) + `nv_gsp_disp_root_alloc` (`AD102_DISP<<16`).
+Оркестратор: обнуляет 64 КиБ VRAM (PRAMIN) → WRITE_INST_MEM → root alloc. HW-прогон впереди.
+**Дальше:** 5C.2 (каналы дисплея), 5C.3 (SOR/link training), 5C.4 (framebuffer+methods=картинка).
 
 ---
 

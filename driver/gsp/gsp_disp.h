@@ -21,6 +21,21 @@
 #define AD102_DISP                 0x0000c770u   /* display root класс (Ada, 5C) */
 
 #define NV_GSP_RM_DISPCOMMON_HANDLE 0x00730000u  /* хэндл NV04_DISPLAY_COMMON (как nouveau) */
+#define NV_GSP_RM_DISPROOT_HANDLE   0xc7700000u  /* AD102_DISP << 16 (display root, 5C) */
+
+/* --- 5C.1: instance-mem дисплея + display root --- */
+/* NV2080_CTRL_CMD_INTERNAL_DISPLAY_WRITE_INST_MEM (ctrl2080internal.h) на ВНУТРЕННИЙ
+   subdevice GSP (hInternalSubdevice из GET_STATIC_INFO). Прописывает RAMIN дисплея. */
+#define NV2080_CTRL_CMD_INTERNAL_DISPLAY_WRITE_INST_MEM  0x20800a49u
+/* params (24б): instMemPhysAddr@0(u64) instMemSize@8(u64) instMemAddrSpace@16 cacheAttr@20. */
+#define NV_DISP_WRINST_PARAMS_SIZE   24u
+#define NV_DISP_WRINST_PHYS_OFF       0u
+#define NV_DISP_WRINST_SIZE_OFF       8u
+#define NV_DISP_WRINST_ADDRSPACE_OFF 16u
+#define NV_DISP_WRINST_CACHEATTR_OFF 20u
+#define NV_RM_ADDR_FBMEM             2u   /* ADDR_FBMEM (VRAM), как memdesc VIDMEM */
+#define NV_MEMORY_WRITECOMBINED      2u   /* nv_memory_type.h */
+#define NV_DISP_INST_SIZE            0x10000u  /* RAMIN дисплея = 64 КиБ */
 
 /* --- Контролы NV0073 SYSTEM (ctrl0073system.h) --- */
 #define NV0073_CTRL_CMD_SYSTEM_GET_NUM_HEADS  0x730102u
@@ -103,5 +118,21 @@ int nv_gsp_disp_get_connect_state(nv_gsp_rpc_chan *ch, uint32_t hClient, uint32_
 int nv_gsp_disp_get_edid(nv_gsp_rpc_chan *ch, uint32_t hClient, uint32_t hDispCommon,
                          uint32_t displayId, uint8_t *buf, uint32_t buf_cap,
                          uint32_t *out_size, uint32_t *status);
+
+/*
+ * 5C.1 шаг 1: прописать RAMIN дисплея (WRITE_INST_MEM) на ВНУТРЕННЕМ subdevice GSP.
+ * hIntClient/hIntSubdevice — hInternalClient/hInternalSubdevice из GET_STATIC_INFO.
+ * inst_phys — физ. VRAM-адрес обнулённого 64 КиБ блока (addrSpace=FBMEM, WC).
+ * Порт r535_disp_oneinit (INTERNAL_DISPLAY_WRITE_INST_MEM).
+ */
+int nv_gsp_disp_write_inst_mem(nv_gsp_rpc_chan *ch, uint32_t hIntClient, uint32_t hIntSubdevice,
+                               uint64_t inst_phys, uint64_t inst_size, uint32_t *status);
+
+/*
+ * 5C.1 шаг 2: аллоцировать display root класс (напр. AD102_DISP=0xC770) под hDevice.
+ * hObject = dispClass<<16, params нет. Порт r535_disp_init. *out_root ← хэндл.
+ */
+int nv_gsp_disp_root_alloc(nv_gsp_rpc_chan *ch, uint32_t hClient, uint32_t hDevice,
+                           uint32_t dispClass, uint32_t *out_root, uint32_t *status);
 
 #endif /* RTXMACOC_GSP_DISP_H */
