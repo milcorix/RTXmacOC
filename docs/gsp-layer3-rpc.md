@@ -1,11 +1,16 @@
-# Слой 3 — двусторонний RPC к GSP-RM: проходы A + B + C (РЕШЕНО на железе)
+# Слой 3 — двусторонний RPC к GSP-RM: A+B+C на железе; D = прямой GMMU (RPC-путь = тупик)
 
 **Статус:** 🟢 проход A (2026-06-30) + проходы B, C (2026-07-01) на RTX 4070 Super
-(AD104), Linux/VFIO.
+(AD104), Linux/VFIO. Проход D через `MAP_MEMORY_DMA (14)` **проверен на железе
+2026-07-14 и отвергнут GSP** (`rpc_result=0x2a NV_ERR_INVALID_FUNCTION`) — этот RPC
+не диспетчеризуется в GSP-offload модели (см. §4D). Дальше D переписывается на
+**прямой GMMU-маппинг** (host-side page-tables, как nouveau `vmm`).
 **Доказательство:** `docs/hw-dumps/20260630-rtx4070s-layer3-rpc-OK.log` (A),
 `docs/hw-dumps/20260701-rtx4070s-layer3-passB-OK.log` (B),
-`docs/hw-dumps/20260701-rtx4070s-layer3-passC-vram-OK.log` (C).
-**Оркестратор:** `tools/gsp_boot_linux.c` (тот же прогон, что и слой 2; блоки «СЛОЙ 3»/«3B»).
+`docs/hw-dumps/20260701-rtx4070s-layer3-passC-vram-OK.log` (C),
+`docs/hw-dumps/gsp-boot-layer3-passD-20260714.log` (D — отрицательный, fn=14 отвергнут).
+**Оркестратор:** `tools/gsp_boot_linux.c` (тот же прогон, что и слой 2; блоки
+«СЛОЙ 3»/«3B»/«3C»/«3D»).
 **Портируемая логика:** `driver/gsp/gsp_rm.{c,h}`. Офлайн-тест: `tools/gsp_rm_test.c`
 (`make gsp-rm-test`). Эталон — nouveau `r535.c`, nvrm-заголовки 535.113.01.
 
@@ -37,8 +42,14 @@
    **зарегистрирован физический VRAM-диапазон** (1 МиБ по phys=0x13100000). В
    GSP-модели VRAM'ом владеет гость: он даёт список физ. страниц (не GSP из кучи).
 
-Дальше: маппинг VRAM-объекта в VA-пространство (получить GPU-адрес); RM-control'ы
-FIFO/GR для слоя 4 (каналы).
+**Проход D** (VRAM → GPU VA; ❌ RPC-путь отвергнут железом, переписывается):
+6. `MAP_MEMORY_DMA (14)` с `hDma=NV01_MEMORY_VIRTUAL`, `hMemory=VRAM memlist`:
+   на железе GSP вернул `rpc_result=0x2a` (`NV_ERR_INVALID_FUNCTION`) — функция не
+   диспетчеризуется. Промежуточные шаги прошли (`NV01_MEMORY_VIRTUAL` создан,
+   `status=0`), но сам маппинг по RPC в GSP-модели невозможен (§4D). Верный путь —
+   прямой GMMU (host пишет PDE/PTE во VRAM).
+
+После реализации D (прямой GMMU) — RM-control'ы FIFO/GR для слоя 4 (каналы).
 
 ---
 
@@ -73,6 +84,7 @@ FERMI_VASPACE_A status=0 handle=0x90f10000       ← корень GMMU
 VRAM memlist phys=0x13100000 size=0x100000 rpc_result=0 handle=0x00ca0001  ← 1 МиБ VRAM
 ```
 `msgq.tx.writePtr`: 7 → 11 (A) → 13 (B) → 14 (C: memlist, +1). На каждый RPC — 1 ответ.
+Для D ожидается 15, но это ещё не подтверждено на железе.
 
 ---
 
@@ -197,6 +209,53 @@ length@32(u64) pageCount@40 pteDesc@44
 
 ---
 
+## 4D. Проход D — маппинг VRAM в GPU VA
+
+### 4D.1 Заход через `MAP_MEMORY_DMA (14)` — 🔴 ТУПИК на железе (HW 2026-07-14)
+
+Первая гипотеза: смаппить VRAM-memlist в VA-пространство одним RPC
+`MAP_MEMORY_DMA (14)` через промежуточный объект `NV01_MEMORY_VIRTUAL` (0x70,
+`hDma`), как это делает RM-путь `virtmemMapTo`. Цепочка построилась, но сам
+маппинг GSP отверг:
+```
+СЛОЙ 3C: VRAM memlist        rc=0 rpc_result=0x0 handle=0x00ca0001   OK
+СЛОЙ 3D: NV01_MEMORY_VIRTUAL rc=0 status=0x0     handle=0x00700001   OK
+СЛОЙ 3D: MAP_MEMORY_DMA      rc=-3 rpc_result=0x2a status=0xffffffff GPU_VA=0x0   FAIL
+```
+`rpc_result=0x2a` = **`NV_ERR_INVALID_FUNCTION`** («Called function is not valid»).
+Внутренний `NVOS46.status` остался `0xffffffff` — GSP до разбора параметров НЕ дошёл.
+Это ошибка **диспетчера RPC**, а не логики маппинга.
+
+Фрейминг сверен байт-в-байт с родным `rpcMapMemoryDma_v03_00` (rpc.c, nvrm
+535.113.01): функция 14, `NVOS46_PARAMETERS_v03_00` (56б: `hClient@0 hDevice@4
+hDma@8 hMemory@12 offset@16 length@24 flags@32 dmaOffset@40 status@48`) — раскладка
+верна. Дело не в ней.
+
+**Корневая причина** (по исходникам OGK 535.113.01, `virtual_mem.c:465-474`):
+```c
+// Skip RPC to the Host RM when local RM is managing page tables.
+bRpcAlloc = !(gpuIsSplitVasManagementServerClientRmEnabled(pGpu) || (bSriovFull && ...));
+```
+`NV_RM_RPC_MAP_MEMORY_DMA` шлётся к firmware **только на пути vGPU/SR-IOV** (когда
+таблицами страниц управляет host RM). В **GSP-offload модели страничными таблицами
+управляет CPU-side RM локально** (`dmaAllocMap` → прямая запись GMMU PTE во VRAM),
+и функция 14 GSP-диспетчером не обслуживается вовсе. Отсюда `INVALID_FUNCTION`.
+
+Это подтверждает раннюю находку: **nouveau тоже не использует `MAP_MEMORY_DMA` RPC**
+— его собственный `nvkm_vmm` пишет PDE/PTE сам. Вывод: RPC-путь к GPU VA —
+архитектурный тупик; правильный путь ниже.
+
+### 4D.2 Прямой GMMU-маппинг (текущий трек)
+
+VA получаем, управляя таблицами страниц GMMU напрямую со стороны хоста (как
+`nouveau vmm` / `dmaAllocMap`): выделить page-tables во VRAM, записать иерархию
+PDE3→PDE2→PDE1→PDE0/PTE для Ada, направить корень на наше VA-пространство. Код
+`nv_gsp_rm_map_memory_dma`, объект `NV01_MEMORY_VIRTUAL` и блок «3D» остаются в
+дереве как задокументированный отрицательный результат; статус 🔴, критерий 🟢
+переносится на прямой GMMU-путь. (Разведка раскладки Ada — следующий шаг.)
+
+---
+
 ## 5. Тупики/нюансы (чтобы не потерять)
 
 - **VRAM НЕ аллоцируется через `NV01_MEMORY_LOCAL_USER` (0x40) + `NV_MEMORY_ALLOCATION_PARAMS`
@@ -204,6 +263,12 @@ length@32(u64) pageCount@40 pteDesc@44
   внутренний status; `sizeof(params)=120` был верен — дело не в размере). Правильно:
   гость выбирает физ. страницы и регистрирует memlist (`NV01_MEMORY_LIST_FBMEM`, §4C).
   Диагностика заняла один HW-прогон; не повторять неверную модель.
+
+- **VRAM НЕ маппится в GPU VA через `MAP_MEMORY_DMA (14)` RPC** — на железе GSP
+  отвечает `rpc_result=0x2a` (`NV_ERR_INVALID_FUNCTION`), функция не диспетчеризуется
+  (§4D.1). Это путь vGPU/SR-IOV; в GSP-offload таблицами управляет host RM локально.
+  Не крутить номер функции/раскладку — фрейминг верен, проблема архитектурная.
+  Правильно: прямой GMMU (§4D.2). Не повторять RPC-модель маппинга.
 
 - **`cmdq.rx.readPtr` остаётся 0** в диагностике — это НЕ значит, что GSP не читает
   cmdq. Факт обработки виден по росту `msgq.tx.writePtr` (7→11) и `status=0` ответов.
@@ -224,14 +289,17 @@ length@32(u64) pageCount@40 pteDesc@44
   `subdevice_ctor`, `r535_gsp_rpc_get_gsp_static_info`/`postinit`;
   `instmem/r535.c` `fbsr_memlist` (ALLOC_MEMORY + NV01_MEMORY_LIST_FBMEM).
 - nvrm 535.113.01: `g_rpc-structures.h` (rpc_gsp_rm_alloc/control_v03_00),
-  `rpc_global_enums.h` (GET_GSP_STATIC_INFO=65, GSP_RM_CONTROL=76, GSP_RM_ALLOC=103),
+  `rpc_global_enums.h` (MAP_MEMORY_DMA=14, GET_GSP_STATIC_INFO=65,
+  GSP_RM_CONTROL=76, GSP_RM_ALLOC=103),
   `cl0000.h`/`cl0080.h`/`cl2080.h` (классы+alloc-params), `cl90f1.h`
   (FERMI_VASPACE_A=0x90f1), `nvos.h` (NV_VASPACE_ALLOCATION_PARAMETERS),
   `nvlimits.h` (NV_PROC_NAME_MAX_LENGTH=100), `gsp_static_config.h`
   (GspStaticConfigInfo), `ctrl2080fb.h` (FB_REGION_INFO; FB_GET_INFO_V2=0x20801303
   + индексы — из полного OGK-заголовка 535.113.01), `cl84a0.h`
   (NV01_MEMORY_LIST_FBMEM=0x82), `g_rpc-structures.h` (rpc_alloc_memory_v13_01),
-  `sdk-structures.h` (pte_desc), `nvos.h` (NVOS02 flags).
+  `sdk-structures.h` (pte_desc), `nvos.h` (NVOS02/NVOS46 flags),
+  `g_sdk-structures.h` (`NVOS46_PARAMETERS_v03_00`), `rpc.c`
+  (`rpcMapMemoryDma_v03_00`).
 
 Реализация: `driver/gsp/gsp_rm.{c,h}`, очереди `driver/gsp/gsp_rpc.{c,h}`,
-оркестратор `tools/gsp_boot_linux.c` (блоки «СЛОЙ 3»/«3B»/«3C»).
+оркестратор `tools/gsp_boot_linux.c` (блоки «СЛОЙ 3»/«3B»/«3C»/«3D»).

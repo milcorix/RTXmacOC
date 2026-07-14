@@ -25,8 +25,9 @@ VRAM, `GSP_RM_ALLOC` создаёт цепочку RM client→device→subdevic
 `FB_GET_INFO_V2` читает конфиг VRAM (RAM=12282 МиБ), `FERMI_VASPACE_A` создаёт
 GPU-виртуальное адресное пространство (корень GMMU), а `ALLOC_MEMORY`/`NV01_MEMORY_LIST_FBMEM`
 регистрирует физический VRAM-диапазон (всё `NV_OK`)
-(логи в [docs/hw-dumps/](docs/hw-dumps/)). Код слоёв 4+ компилируется в CI и сверен
-с nova-core/nouveau, но на железе ещё не исполнялся.
+(логи в [docs/hw-dumps/](docs/hw-dumps/)). Проход D (VRAM → GPU VA) через RPC
+`MAP_MEMORY_DMA` **отвергнут GSP на железе** (`NV_ERR_INVALID_FUNCTION` — это путь
+vGPU, не GSP-client); маппинг переписывается на прямой GMMU (host-side page-tables).
 
 > ⚠️ **Блокер вывода изображения.** В современном macOS (Big Sur+) **нет публичной
 > точки расширения** для стороннего kext/dext как полноценного GPU-акселератора
@@ -42,7 +43,7 @@ GPU-виртуальное адресное пространство (корен
 |---|------|--------|
 | 1 | **PCIe bring-up** — найти карту, смапить BAR0, прочитать chip ID (`PMC_BOOT_0`) | 🟢 декод подтверждён на железе (kext-загрузка ждёт macOS) |
 | 2 | **GSP bring-up** — поднять GPU через GSP, наладить RPC | 🟢 **ЗАВЕРШЁН на железе** (Linux/VFIO): FWSEC-FRTS→WPR2→Booter→GSP RISC-V active → **`GSP_INIT_DONE` по RPC** |
-| 3 | **Memory management (GMMU/VRAM)** через RPC | 🟢 **проходы A+B+C на железе**: RPC + RM client/device/subdevice (A); `RM_CONTROL`/`FB_GET_INFO_V2` + `FERMI_VASPACE_A` (GMMU) (B); регистрация VRAM `NV01_MEMORY_LIST_FBMEM` (C); дальше — маппинг VRAM в VA |
+| 3 | **Memory management (GMMU/VRAM)** через RPC | 🟢 **A+B+C на железе**: RPC/RM-цепочка; FB-control + VASPACE; VRAM memlist. 🔴 **D**: `MAP_MEMORY_DMA` отвергнут GSP (`INVALID_FUNCTION`, путь vGPU) → трек сменён на прямой GMMU-маппинг |
 | 4 | Command submission (каналы) | ⏳ |
 | 5 | **Display / modeset** — вывод изображения | ⛔ заблокирован моделью Apple (см. выше) |
 | 6 | 3D / compute (Metal) | ⛔ закрытый интерфейс |
@@ -76,7 +77,8 @@ GSP RISC-V active, затем RPC-handshake: `SET_SYSTEM_INFO`+`SET_REGISTRY` в
   слоя 2 за один прогон на единственной GPU без ребута (возвращает GUI).
 - macOS-kext-шим `driver/RTXProbe/FwsecRun.*` (IOPCIDevice/IOBufferMemoryDescriptor) —
   всё ещё 🟡: те же модули, но на самой macOS не прогонялся.
-- Дальше: **слой 3** — память/GMMU и аллокации VRAM через RPC (канал GSP уже работает).
+- Дальше: **прямой GMMU-маппинг** (page-tables PDE3→PTE во VRAM) — `MAP_MEMORY_DMA`
+  оказался тупиком (GSP отвергает fn=14, HW 2026-07-14), затем **слой 4** (каналы).
 
 ---
 
@@ -124,7 +126,7 @@ RTX 4070 Super (AD104, `10DE:2783`) на i5-12400F + Gigabyte B760M, без iGPU
 - [Архитектура и стратегия](docs/ARCHITECTURE.md) — где стена и куда бьём (путь через GSP).
 - [Графический стек macOS и блокер вывода](docs/macos-graphics-stack.md) — почему вывод картинки сторонним драйвером на Big Sur+ закрыт.
 - [Bring-up GSP — слой 2 РЕШЁН](docs/gsp-bringup-layer2.md) — полная тех-запись: как GSP-RM доходит до `GSP_INIT_DONE` (смещения структур, опкоды секвенсера, грабли).
-- [Слой 3 — двусторонний RPC (проходы A+B+C)](docs/gsp-layer3-rpc.md) — тех-запись: RM client/device/subdevice + `FB_GET_INFO_V2` + `FERMI_VASPACE_A` (GMMU) + регистрация VRAM (`NV01_MEMORY_LIST_FBMEM`).
+- [Слой 3 — двусторонний RPC (проходы A+B+C+D)](docs/gsp-layer3-rpc.md) — RM-цепочка, `FB_GET_INFO_V2`, `FERMI_VASPACE_A`, VRAM memlist и `MAP_MEMORY_DMA`.
 - [Bring-up GSP (план)](docs/gsp-bringup-notes.md) — исходный план атаки по открытым исходникам.
 - [Состояние реализации](docs/IMPLEMENTATION.md) — что и как уже сделано, следующие шаги.
 - [Карта портирования](docs/PORTING-MAP.md) — соответствие наш код ↔ исходники nova-core.

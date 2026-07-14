@@ -28,14 +28,16 @@
 3. Memory management (GMMU/VRAM) через RPC. 🟢 **проходы A+B+C на железе**: A — двусторонний
    RPC + `GET_GSP_STATIC_INFO` + RM client/device/subdevice; B — `RM_CONTROL`/`FB_GET_INFO_V2`
    + `FERMI_VASPACE_A` (корень GMMU); C — регистрация VRAM (`NV01_MEMORY_LIST_FBMEM` через
-   `ALLOC_MEMORY`; VRAM'ом владеет гость). Тех-запись: **`docs/gsp-layer3-rpc.md`**.
-   Дальше — маппинг VRAM в VA-пространство.
+   `ALLOC_MEMORY`; VRAM'ом владеет гость). Проход D (VRAM → GPU VA): заход через
+   `MAP_MEMORY_DMA (14)` **отвергнут GSP на железе** (`NV_ERR_INVALID_FUNCTION` — это
+   путь vGPU, не GSP-client); текущий трек — **прямой GMMU-маппинг** (page-tables во
+   VRAM, как `nouveau vmm`). Тех-запись: **`docs/gsp-layer3-rpc.md`** §4D.
 4. Command submission (каналы).
 5. Display / modeset — **вывод картинки**. Конечная видимая цель.
 6. 3D/compute (Metal) — самое дальнее.
 
-Важно: слой 5 (дисплей) невозможен без 2+3+4. Слой 2 закрыт; слой 3 — все три RPC-глагола
-(alloc/control/static) + GMMU-корень на железе; дальше аллокация VRAM, потом слой 4 (каналы).
+Важно: слой 5 (дисплей) невозможен без 2+3+4. Слой 2 закрыт; слой 3 — все три RPC-глагола,
+GMMU-корень и VRAM memlist на железе; VA-маппинг переведён на прямой GMMU-путь (RPC отвергнут).
 
 ## Структура репозитория
 
@@ -144,11 +146,19 @@ docs/                   архитектура, роадмап, конспект
   `nv_gsp_rm_control`/`nv_gsp_fb_get_info`/`nv_gsp_rm_vaspace_ctor`/`nv_gsp_rm_vram_memlist`.
   **Тупик (в тех-записи §5):** VRAM НЕ аллоцировать из кучи GSP через `NV01_MEMORY_LOCAL_USER`
   (отвергается) — гость даёт физ. страницы (memlist).
+- Слой 3 **проход D**: 🔴 **HW 2026-07-14 — RPC-путь = ТУПИК**. `MAP_MEMORY_DMA (14)`
+  через `NV01_MEMORY_VIRTUAL` (0x70): vmem-объект создался (`status=0`), но маппинг GSP
+  отверг — `rpc_result=0x2a NV_ERR_INVALID_FUNCTION`. Причина (OGK `virtual_mem.c:474`):
+  этот RPC шлётся к firmware только на пути vGPU/SR-IOV; в GSP-offload page-tables ведёт
+  host RM локально. **Тупик (§4D/§5): не крутить fn/раскладку — фрейминг верен, проблема
+  архитектурная.** Лог: `docs/hw-dumps/gsp-boot-layer3-passD-20260714.log`. Правильно —
+  прямой GMMU (host пишет PDE/PTE во VRAM, как nouveau `vmm`). Код `nv_gsp_rm_map_memory_dma`
+  + `nv_gsp_rm_vmem_ctor` остаются как отрицательный результат.
 - Спека: `.kiro/specs/rtx-tahoe-full-support/` (requirements/design/tasks).
 - Прогон без ребута/монитора: `tools/run-gsp-boot-detached.sh` (весь слой 2 + слой 3
-  проходы A/B/C), `tools/run-fwsec-detached.sh` (только FWSEC). Linux/VFIO, возвращают GUI.
-- Дальше: **маппинг VRAM-объекта в VA-пространство** (получить GPU-адрес), затем
-  **слой 4** (каналы: FIFO/GR RM-control'ы) через работающий двусторонний RPC.
+  проходы A/B/C/D), `tools/run-fwsec-detached.sh` (только FWSEC). Linux/VFIO, возвращают GUI.
+- Дальше: **реализовать проход D через прямой GMMU** (разведка раскладки PDE/PTE для Ada
+  из nouveau `vmmgp100`), затем **слой 4** (каналы: FIFO/GR RM-control'ы).
 
 ## Ключевые источники (референс-база)
 

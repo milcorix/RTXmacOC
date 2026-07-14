@@ -1,5 +1,5 @@
 /*
- * gsp_rm.h — слой 3, проход A: двусторонний RPC к живому GSP-RM + базовые RM-объекты.
+ * gsp_rm.h — слой 3: двусторонний RPC к живому GSP-RM, RM-объекты и память.
  *
  * После GSP_INIT_DONE (слой 2) канал «драйвер↔GSP» уже поднят: cmdq (CPU→GSP) и
  * msgq (GSP→CPU) в общей памяти. Здесь — ПОЛНОЦЕННЫЙ двусторонний RPC: послать
@@ -32,6 +32,7 @@
 #define FERMI_VASPACE_A         0x000090f1u
 #define NV01_MEMORY_LIST_FBMEM  0x00000082u   /* VRAM memlist (гость даёт физ. страницы) */
 #define NV01_MEMORY_LIST_SYSTEM 0x00000081u
+#define NV01_MEMORY_VIRTUAL     0x00000070u   /* объект VirtualMemory (ссылается на VA-space) */
 
 /* Канонические хэндлы цепочки (ровно как nouveau r535_gsp_*_ctor). */
 #define NV_GSP_RM_CLIENT_HANDLE  0xc1d00000u  /* | id (id=0) */
@@ -39,6 +40,7 @@
 #define NV_GSP_RM_SUBDEV_HANDLE  0x5d1d0000u
 #define NV_GSP_RM_VASPACE_HANDLE 0x90f10000u
 #define NV_GSP_RM_VRAM_HANDLE    0x00ca0001u  /* наш хэндл VRAM-объекта */
+#define NV_GSP_RM_VMEM_HANDLE    0x00700001u  /* наш хэндл VirtualMemory-объекта */
 
 /* rpc_gsp_rm_control_v03_00 — шапка 24 байта (g_rpc-structures.h):
    hClient@0, hObject@4, cmd@8, status@12, paramsSize@16, flags@20, params@24. */
@@ -94,6 +96,31 @@
 #define NVOS02_FLAGS_FBMEM_CONTIG_NOMAP  0x40000200u
 #define NV_MMU_PTE_KIND_GENERIC_MEMORY   6u   /* format для VIDMEM */
 #define NV_GSP_PAGE_SHIFT                12u
+
+/* --- Маппинг памяти в GPU VA через MAP_MEMORY_DMA ---
+ * rpc_map_memory_dma_v03_00 = NVOS46_PARAMETERS_v03_00 (56б).
+ * Функция MAP_MEMORY_DMA=14 (rpc_global_enums.h 535.113.01). */
+#define NV_VGPU_MSG_FUNCTION_MAP_MEMORY_DMA  14u
+#define NV_MAP_MEMORY_DMA_PARAMS_SIZE         56u
+#define NV_MAP_MEMORY_DMA_HCLIENT_OFF          0u
+#define NV_MAP_MEMORY_DMA_HDEVICE_OFF          4u
+#define NV_MAP_MEMORY_DMA_HDMA_OFF             8u
+#define NV_MAP_MEMORY_DMA_HMEMORY_OFF          12u
+#define NV_MAP_MEMORY_DMA_OFFSET_OFF           16u
+#define NV_MAP_MEMORY_DMA_LENGTH_OFF           24u
+#define NV_MAP_MEMORY_DMA_FLAGS_OFF            32u
+#define NV_MAP_MEMORY_DMA_DMAOFFSET_OFF        40u
+#define NV_MAP_MEMORY_DMA_STATUS_OFF           48u
+/* flags=0: read/write, physical page kind, default page size, динамический GPU VA. */
+#define NVOS46_FLAGS_DEFAULT                   0u
+
+/* NV_MEMORY_VIRTUAL_ALLOCATION_PARAMS (cl0070.h, 24б): объект VirtualMemory,
+   через который MAP_MEMORY_DMA кладёт физ. память в наше VA-пространство.
+   offset@0 (u64,IN) limit@8 (u64,IN/OUT) hVASpace@16 (u32,IN). */
+#define NV_VMEM_ALLOC_PARAMS_SIZE   24u
+#define NV_VMEM_OFFSET_OFF           0u
+#define NV_VMEM_LIMIT_OFF            8u
+#define NV_VMEM_HVASPACE_OFF        16u
 
 /* rpc_gsp_rm_alloc_v03_00 — шапка 32 байта (g_rpc-structures.h):
    hClient@0, hParent@4, hObject@8, hClass@12, status@16, paramsSize@20,
@@ -230,5 +257,29 @@ int nv_gsp_rm_vaspace_ctor(nv_gsp_rpc_chan *ch, uint32_t hClient, uint32_t hDevi
 int nv_gsp_rm_vram_memlist(nv_gsp_rpc_chan *ch, uint32_t hClient, uint32_t hDevice,
                            uint64_t phys, uint64_t size,
                            uint32_t *out_handle, uint32_t *rpc_result);
+
+/*
+ * Аллокация объекта VirtualMemory (NV01_MEMORY_VIRTUAL, 0x70) под hDevice,
+ * ссылающегося на VA-пространство hVASpace (наш FERMI_VASPACE_A). Именно этот
+ * объект (а не сам vaspace) служит hDma в MAP_MEMORY_DMA — RM резолвит hDma в
+ * VirtualMemory (context-dma в едином объектном виде, cl0070.h).
+ * params NV_MEMORY_VIRTUAL_ALLOCATION_PARAMS (24б): offset=0, limit=0 (→ max), hVASpace.
+ * *out_vmem ← хэндл, *status ← статус RM. Порт: virtmemConstruct + cl0070.h.
+ */
+int nv_gsp_rm_vmem_ctor(nv_gsp_rpc_chan *ch, uint32_t hClient, uint32_t hDevice,
+                        uint32_t hVASpace, uint32_t *out_vmem, uint32_t *status);
+
+/*
+ * MAP_MEMORY_DMA: смаппить [offset, offset+length) объекта hMemory в hDma
+ * (объект NV01_MEMORY_VIRTUAL, ссылающийся на FERMI_VASPACE_A) и вернуть GPU VA
+ * в *dma_offset. На входе *dma_offset=0 и flags=NVOS46_FLAGS_DEFAULT просят RM
+ * выбрать адрес; поле является IN/OUT.
+ * *status — NVOS46.status, *rpc_result — статус RPC-заголовка.
+ */
+int nv_gsp_rm_map_memory_dma(nv_gsp_rpc_chan *ch, uint32_t hClient, uint32_t hDevice,
+                             uint32_t hDma, uint32_t hMemory,
+                             uint64_t offset, uint64_t length, uint32_t flags,
+                             uint64_t *dma_offset, uint32_t *status,
+                             uint32_t *rpc_result);
 
 #endif /* RTXMACOC_GSP_RM_H */

@@ -2,12 +2,12 @@
  * gsp_rm_test.c — офлайн-тест двустороннего RPC слоя 3 (без GPU).
  *
  * Строит синтетический shared-регион очередей, заранее кладёт в msgq «ответ GSP»
- * и проверяет, что nv_gsp_rpc_call / get_static_info / rm_alloc:
+ * и проверяет, что nv_gsp_rpc_call / get_static_info / rm_alloc / map_memory_dma:
  *   - корректно собирают cmdq-элемент (checksum, продвижение writePtr/seq);
  *   - распознают ответ по function, собирают multi-page payload;
  *   - пропускают async-сообщение перед ответом;
  *   - правильно парсят FB-карту и хэндлы (на синтетических данных).
- * Плюс юнит на размеры alloc-params (NV0000/NV0080/NV2080) и константы смещений.
+ * Плюс юнит на размеры alloc-params (NV0000/NV0080/NV2080/NVOS46) и смещения.
  *
  * Собрать: make gsp-rm-test ; запустить: ./tools/gsp_rm_test
  */
@@ -320,12 +320,81 @@ static void test_vram_memlist(void)
     CHECK(ld64t(rp + NV_ALLOCMEM_PTEARR_OFF + 8) == (phys >> 12) + 1, "pte[1] == phys>>12 + 1 (contiguous)");
 }
 
-/* --- тест 10: размеры структур и константы --- */
+/* --- тест 10a: VirtualMemory ctor (NV01_MEMORY_VIRTUAL → ссылка на vaspace) --- */
+static void test_vmem_ctor(void)
+{
+    printf("[test_vmem_ctor]\n");
+    nv_gsp_rpc_chan ch; chan_init(&ch);
+    uint8_t rep[64]; memset(rep, 0, sizeof(rep));   /* status@16 = NV_OK (0) */
+    put_msg(g_shm, &ch.lay, 0, NV_VGPU_MSG_FUNCTION_GSP_RM_ALLOC, 0, rep, sizeof(rep), 1);
+    set_msgq_wptr(g_shm, &ch.lay, 1);
+
+    uint32_t hvmem=0, st=0xff;
+    int rc = nv_gsp_rm_vmem_ctor(&ch, NV_GSP_RM_CLIENT_HANDLE, NV_GSP_RM_DEVICE_HANDLE,
+                                 NV_GSP_RM_VASPACE_HANDLE, &hvmem, &st);
+    CHECK(rc == NV_GSP_RM_OK, "vmem_ctor OK");
+    CHECK(st == 0, "status == NV_OK");
+    CHECK(hvmem == NV_GSP_RM_VMEM_HANDLE, "хэндл VMEM == 0x00700001");
+    /* framing: RM_ALLOC с классом NV01_MEMORY_VIRTUAL и params.hVASpace */
+    const uint8_t *ce = g_shm + ch.lay.cmdq_off + NV_GSP_QUEUE_ENTRYOFF + 0;
+    const uint8_t *hp = ce + NV_GSP_RPC_PAYLOAD_OFF;              /* rpc_gsp_rm_alloc header */
+    const uint8_t *pp = hp + NV_RM_ALLOC_HDR_SIZE;               /* params */
+    CHECK(ld32(hp + NV_RM_ALLOC_HCLASS_OFF) == NV01_MEMORY_VIRTUAL, "hClass == NV01_MEMORY_VIRTUAL(0x70)");
+    CHECK(ld32(pp + NV_VMEM_HVASPACE_OFF) == NV_GSP_RM_VASPACE_HANDLE, "params.hVASpace == vaspace handle");
+    CHECK(ld64t(pp + NV_VMEM_OFFSET_OFF) == 0, "params.offset == 0");
+    CHECK(ld64t(pp + NV_VMEM_LIMIT_OFF) == 0, "params.limit == 0 (→ max)");
+}
+
+/* --- тест 10: MAP_MEMORY_DMA (VRAM memlist → VirtualMemory → GPU VA) --- */
+static void test_map_memory_dma(void)
+{
+    printf("[test_map_memory_dma]\n");
+    nv_gsp_rpc_chan ch; chan_init(&ch);
+
+    uint8_t rep[NV_MAP_MEMORY_DMA_PARAMS_SIZE]; memset(rep, 0, sizeof(rep));
+    uint64_t expected_va = 0x0000000201000000ull;
+    st64(rep + NV_MAP_MEMORY_DMA_DMAOFFSET_OFF, expected_va);
+    st32(rep + NV_MAP_MEMORY_DMA_STATUS_OFF, 0);
+    put_msg(g_shm, &ch.lay, 0, NV_VGPU_MSG_FUNCTION_MAP_MEMORY_DMA,
+            /*rpc_result*/0, rep, sizeof(rep), 1);
+    set_msgq_wptr(g_shm, &ch.lay, 1);
+
+    uint64_t gpu_va = 0;
+    uint32_t st = 0xffffffffu, rres = 0xffffffffu;
+    int rc = nv_gsp_rm_map_memory_dma(&ch, NV_GSP_RM_CLIENT_HANDLE,
+                                      NV_GSP_RM_DEVICE_HANDLE,
+                                      NV_GSP_RM_VMEM_HANDLE,
+                                      NV_GSP_RM_VRAM_HANDLE,
+                                      0, 0x100000ull, NVOS46_FLAGS_DEFAULT,
+                                      &gpu_va, &st, &rres);
+    CHECK(rc == NV_GSP_RM_OK, "map_memory_dma OK");
+    CHECK(rres == 0, "rpc_result == 0");
+    CHECK(st == 0, "NVOS46.status == NV_OK");
+    CHECK(gpu_va == expected_va, "dmaOffset OUT == GPU VA");
+
+    const uint8_t *ce = g_shm + ch.lay.cmdq_off + NV_GSP_QUEUE_ENTRYOFF + 0;
+    const uint8_t *mp = ce + NV_GSP_RPC_PAYLOAD_OFF;
+    CHECK(ld32(ce + NV_GSP_RPC_HDR_OFF + NV_GSP_RPC_F_FUNCTION) ==
+          NV_VGPU_MSG_FUNCTION_MAP_MEMORY_DMA, "function == MAP_MEMORY_DMA(14)");
+    CHECK(ld32(mp + NV_MAP_MEMORY_DMA_HDMA_OFF) == NV_GSP_RM_VMEM_HANDLE,
+          "hDma == NV01_MEMORY_VIRTUAL handle");
+    CHECK(ld32(mp + NV_MAP_MEMORY_DMA_HMEMORY_OFF) == NV_GSP_RM_VRAM_HANDLE,
+          "hMemory == VRAM memlist handle");
+    CHECK(ld64t(mp + NV_MAP_MEMORY_DMA_OFFSET_OFF) == 0, "offset == 0");
+    CHECK(ld64t(mp + NV_MAP_MEMORY_DMA_LENGTH_OFF) == 0x100000ull, "length == 1 MiB");
+    CHECK(ld32(mp + NV_MAP_MEMORY_DMA_FLAGS_OFF) == 0, "flags == dynamic VA defaults");
+    CHECK(ld64t(mp + NV_MAP_MEMORY_DMA_DMAOFFSET_OFF) == 0, "dmaOffset IN == 0");
+}
+
+/* --- тест 11: размеры структур и константы --- */
 struct nv0000_mirror { uint32_t hClient; uint32_t processID; char processName[100]; };
 struct nv0080_mirror { uint32_t deviceId, hClientShare, hTargetClient, hTargetDevice;
                        int32_t flags; uint64_t vaSpaceSize, vaStartInternal, vaLimitInternal;
                        int32_t vaMode; };
 struct nv2080_mirror { uint32_t subDeviceId; };
+struct nvos46_mirror { uint32_t hClient, hDevice, hDma, hMemory;
+                       uint64_t offset, length; uint32_t flags;
+                       uint64_t dmaOffset; uint32_t status; };
 
 static void test_layout(void)
 {
@@ -342,6 +411,14 @@ static void test_layout(void)
     CHECK(NV_VASPACE_ALLOC_PARAMS_SIZE == 48, "NV_VASPACE_ALLOCATION_PARAMETERS == 48");
     CHECK(NV_ALLOCMEM_PTEARR_OFF == 48, "pte_pde[] @48 в rpc_alloc_memory_v13_01");
     CHECK(NVOS02_FLAGS_FBMEM_CONTIG_NOMAP == 0x40000200u, "NVOS02 flags VIDMEM|CONTIG|NO_MAP == 0x40000200");
+    CHECK(sizeof(struct nvos46_mirror) == NV_MAP_MEMORY_DMA_PARAMS_SIZE,
+          "sizeof(NVOS46_PARAMETERS_v03_00) == 56");
+    CHECK(offsetof(struct nvos46_mirror, dmaOffset) == NV_MAP_MEMORY_DMA_DMAOFFSET_OFF,
+          "NVOS46.dmaOffset @40");
+    CHECK(offsetof(struct nvos46_mirror, status) == NV_MAP_MEMORY_DMA_STATUS_OFF,
+          "NVOS46.status @48");
+    CHECK(NV_VMEM_ALLOC_PARAMS_SIZE == 24, "NV_MEMORY_VIRTUAL_ALLOCATION_PARAMS == 24 (probe)");
+    CHECK(NV_VMEM_HVASPACE_OFF == 16, "NV_MEMORY_VIRTUAL.hVASpace @16 (probe)");
 }
 
 int main(void)
@@ -355,6 +432,8 @@ int main(void)
     test_fb_get_info();
     test_vaspace_ctor();
     test_vram_memlist();
+    test_vmem_ctor();
+    test_map_memory_dma();
     test_layout();
     printf(failed ? "\n=== gsp_rm_test: ЕСТЬ ПРОВАЛЫ ===\n" : "\n=== gsp_rm_test: ВСЕ ТЕСТЫ ПРОШЛИ ===\n");
     return failed ? 1 : 0;

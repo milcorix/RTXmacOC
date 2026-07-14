@@ -43,7 +43,7 @@ Big Sur+ нет (library validation + приватные интерфейсы + 
 |---|---|---|---|
 | 1 | PCIe bring-up, чтение `PMC_BOOT_0` | 🟡 CI (на железе не запускался) | `pcie_probe.c`, `ada_regs.h`, `driver/RTXProbe/`, `driver/RTXProbeDext/` |
 | 2 | GSP bring-up (FWSEC-FRTS→WPR2→GSP-RM→`GSP_INIT_DONE`) | 🟢 HW 2026-06-30 (Linux/VFIO) для `driver/gsp/*`; macOS-kext-шим `FwsecRun.cpp` — 🟡 CI | `tools/{vbios_dump,fwsec_run_linux,gsp_boot_linux}.c`, `falcon_regs.h`, `driver/gsp/*` |
-| 3 | Память (GMMU/VRAM) через RPC | 🟢 HW **A** (RPC + RM client/device/subdevice) + **B** (RM_CONTROL/FB_GET_INFO_V2 + FERMI_VASPACE_A/GMMU) + **C** (VRAM memlist NV01_MEMORY_LIST_FBMEM), 2026-06-30..07-01 | `driver/gsp/gsp_rm.*`, `tools/{gsp_boot_linux,gsp_rm_test}.c` |
+| 3 | Память (GMMU/VRAM) | 🟢 HW **A** (RPC + RM client/device/subdevice) + **B** (RM_CONTROL/FB_GET_INFO_V2 + FERMI_VASPACE_A/GMMU) + **C** (VRAM memlist NV01_MEMORY_LIST_FBMEM), 2026-06-30..07-01; 🔴 **D** MAP_MEMORY_DMA RPC отвергнут GSP на HW (INVALID_FUNCTION, 2026-07-14) → переписывается на прямой GMMU | `driver/gsp/gsp_rm.*`, `tools/{gsp_boot_linux,gsp_rm_test}.c` |
 | 4–6 | каналы/дисплей/Metal | ⏳ (дисплей — заблокирован Apple, см. graphics-stack) | — |
 
 ---
@@ -164,7 +164,7 @@ WPR2-границы, GFW boot, `NV_PGSP_QUEUE_HEAD`.
 После `GSP_INIT_DONE` поднят **двусторонний RPC** к живому GSP-RM (послать команду
 пост-бут, дождаться типизированного ответа). Новый портируемый модуль
 `driver/gsp/gsp_rm.{c,h}` (порт nouveau `r535.c`), офлайн-тест `tools/gsp_rm_test.c`
-(`make gsp-rm-test`, 38 проверок: framing/checksum/multi-page/async-skip/парс/размеры).
+(`make gsp-rm-test`: framing/checksum/multi-page/async-skip/парс/размеры).
 
 - **Метрика №1 🟢 HW:** `GET_GSP_STATIC_INFO (65)` — GSP вернул `rpc_result=0` и
   **карту 5 FB-регионов VRAM** (вершина = 0x2ffa00000 = 12282 МиБ), внутренние хэндлы
@@ -195,8 +195,22 @@ WPR2-границы, GFW boot, `NV_PGSP_QUEUE_HEAD`.
   отверг (`rpc_result≠0`); правильно — memlist (порт `fbsr_memlist`). Код:
   `nv_gsp_rm_vram_memlist`. Доказательство:
   `docs/hw-dumps/20260701-rtx4070s-layer3-passC-vram-OK.log`.
-- **Полная тех-запись: `docs/gsp-layer3-rpc.md`** (проходы A+B+C).
-- Дальше: маппинг VRAM-объекта в VA-пространство (GPU-адрес); затем слой 4 (каналы).
+
+**Проход D 🔴 HW 2026-07-14 — RPC-путь = ТУПИК; VRAM → GPU VA:**
+- `MAP_MEMORY_DMA (14)` через промежуточный `NV01_MEMORY_VIRTUAL (0x70)` собрался
+  (vmem-объект `status=0 handle=0x00700001`), но сам маппинг GSP **отверг**:
+  `rc=-3 rpc_result=0x2a (NV_ERR_INVALID_FUNCTION) status=0xffffffff GPU_VA=0`.
+- Причина (OGK 535.113.01 `virtual_mem.c:465,474,1533`): `NV_RM_RPC_MAP_MEMORY_DMA`
+  шлётся к firmware **только на пути vGPU/SR-IOV**. В GSP-offload модели page-tables
+  ведёт CPU-side RM локально (`dmaAllocMap`), функция 14 GSP не диспетчеризуется.
+  Совпадает с тем, что nouveau тоже НЕ использует этот RPC (его `vmm` пишет PDE/PTE сам).
+- Код `nv_gsp_rm_map_memory_dma` + `nv_gsp_rm_vmem_ctor` и блок «3D» остаются как
+  задокументированный отрицательный результат. Framing сверен байт-в-байт с
+  `rpcMapMemoryDma_v03_00` — дело не в раскладке, а в самой функции.
+- Доказательство: `docs/hw-dumps/gsp-boot-layer3-passD-20260714.log`.
+- **Правильный трек — прямой GMMU-маппинг** (как `nouveau vmm`): page-tables во VRAM,
+  запись PDE3→PDE0/PTE для Ada, корень на наше VA-пространство. Разведка раскладки — след. шаг.
+- **Полная тех-запись: `docs/gsp-layer3-rpc.md`** §4D.
 
 ---
 

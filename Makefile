@@ -65,7 +65,7 @@ gsp-boot-linux:
 gsp-rpc-test:
 	cc -Wall -Wextra -O2 tools/gsp_rpc_test.c driver/gsp/gsp_rpc.c -o tools/gsp_rpc_test
 
-# Офлайн-тест двустороннего RPC слоя 3 (RM client/device/subdevice + static_info). Без GPU.
+# Офлайн-тест RPC слоя 3 (RM-цепочка, static_info, VRAM memlist/map). Без GPU.
 #   make gsp-rm-test && ./tools/gsp_rm_test
 gsp-rm-test:
 	cc -Wall -Wextra -O2 tools/gsp_rm_test.c driver/gsp/gsp_rm.c driver/gsp/gsp_rpc.c -o tools/gsp_rm_test

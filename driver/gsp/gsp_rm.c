@@ -318,3 +318,58 @@ int nv_gsp_rm_vram_memlist(nv_gsp_rpc_chan *ch, uint32_t hClient, uint32_t hDevi
     if (out_handle) *out_handle = h;
     return (rres == 0) ? NV_GSP_RM_OK : NV_GSP_RM_ERR_BOUNDS;
 }
+
+int nv_gsp_rm_vmem_ctor(nv_gsp_rpc_chan *ch, uint32_t hClient, uint32_t hDevice,
+                        uint32_t hVASpace, uint32_t *out_vmem, uint32_t *status)
+{
+    if (!ch) return NV_GSP_RM_ERR_ARG;
+    uint32_t h = NV_GSP_RM_VMEM_HANDLE;
+    /* NV_MEMORY_VIRTUAL_ALLOCATION_PARAMS (24б): offset=0, limit=0 (всё пространство),
+       hVASpace = наш FERMI_VASPACE_A. */
+    uint8_t p[NV_VMEM_ALLOC_PARAMS_SIZE];
+    for (unsigned i = 0; i < sizeof(p); i++) p[i] = 0;
+    st64(p + NV_VMEM_OFFSET_OFF,   0u);
+    st64(p + NV_VMEM_LIMIT_OFF,    0u);
+    st32(p + NV_VMEM_HVASPACE_OFF, hVASpace);
+    /* Родитель VirtualMemory — device (как и у vaspace). */
+    int rc = nv_gsp_rm_alloc(ch, hClient, hDevice, h, NV01_MEMORY_VIRTUAL,
+                             p, sizeof(p), status);
+    if (rc == NV_GSP_RM_OK && out_vmem) *out_vmem = h;
+    return rc;
+}
+
+int nv_gsp_rm_map_memory_dma(nv_gsp_rpc_chan *ch, uint32_t hClient, uint32_t hDevice,
+                             uint32_t hDma, uint32_t hMemory,
+                             uint64_t offset, uint64_t length, uint32_t flags,
+                             uint64_t *dma_offset, uint32_t *status,
+                             uint32_t *rpc_result)
+{
+    if (!ch || !dma_offset || length == 0) return NV_GSP_RM_ERR_ARG;
+    if (offset + length < offset) return NV_GSP_RM_ERR_ARG;
+
+    /* rpc_map_memory_dma_v03_00 содержит только NVOS46_PARAMETERS_v03_00. */
+    uint8_t req[NV_MAP_MEMORY_DMA_PARAMS_SIZE];
+    uint8_t rep[NV_MAP_MEMORY_DMA_PARAMS_SIZE];
+    for (uint32_t i = 0; i < sizeof(req); i++) req[i] = 0;
+    st32(req + NV_MAP_MEMORY_DMA_HCLIENT_OFF, hClient);
+    st32(req + NV_MAP_MEMORY_DMA_HDEVICE_OFF, hDevice);
+    st32(req + NV_MAP_MEMORY_DMA_HDMA_OFF,    hDma);
+    st32(req + NV_MAP_MEMORY_DMA_HMEMORY_OFF, hMemory);
+    st64(req + NV_MAP_MEMORY_DMA_OFFSET_OFF,  offset);
+    st64(req + NV_MAP_MEMORY_DMA_LENGTH_OFF,  length);
+    st32(req + NV_MAP_MEMORY_DMA_FLAGS_OFF,   flags);
+    st64(req + NV_MAP_MEMORY_DMA_DMAOFFSET_OFF, *dma_offset);
+
+    uint32_t rlen = 0, rres = 0xffffffffu;
+    int rc = nv_gsp_rpc_call(ch, NV_VGPU_MSG_FUNCTION_MAP_MEMORY_DMA,
+                             req, sizeof(req), rep, sizeof(rep),
+                             &rlen, &rres, 4000000u);
+    if (rpc_result) *rpc_result = rres;
+    if (rc != NV_GSP_RM_OK) return rc;
+    if (rres != 0) return NV_GSP_RM_ERR_BOUNDS;
+    if (rlen < NV_MAP_MEMORY_DMA_PARAMS_SIZE) return NV_GSP_RM_ERR_BOUNDS;
+
+    *dma_offset = ld64(rep + NV_MAP_MEMORY_DMA_DMAOFFSET_OFF);
+    if (status) *status = ld32(rep + NV_MAP_MEMORY_DMA_STATUS_OFF);
+    return NV_GSP_RM_OK;
+}

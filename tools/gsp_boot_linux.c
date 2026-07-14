@@ -472,7 +472,8 @@ static int run(const nv_mmio_t *io, struct arena *ar, const char *bdf)
        Канал уже поднят (INIT_DONE). Продолжаем с тех же указателей: cmdq.writePtr и
        msgq.readPtr, что оставил дренаж. Делаем первый двусторонний RPC
        GET_GSP_STATIC_INFO (карта FB-регионов), затем цепочку RM client→device→subdevice. */
-    int l3_static_ok = 0, l3_chain_ok = 0, l3_ctrl_ok = 0, l3_vaspace_ok = 0, l3_vram_ok = 0;
+    int l3_static_ok = 0, l3_chain_ok = 0, l3_ctrl_ok = 0, l3_vaspace_ok = 0;
+    int l3_vram_ok = 0, l3_map_ok = 0;
     if (got) {
         nv_gsp_rpc_chan ch;
         memset(&ch, 0, sizeof(ch));
@@ -564,14 +565,39 @@ static int run(const nv_mmio_t *io, struct arena *ar, const char *bdf)
                 l3_vram_ok = (mrc == NV_GSP_RM_OK && mrres == 0);
                 printf("СЛОЙ 3C: VRAM memlist phys=0x%llx size=0x%llx rc=%d rpc_result=0x%x handle=0x%08x\n",
                        (unsigned long long)vphys, (unsigned long long)vsize, mrc, mrres, hmem);
+
+                /* --- ПРОХОД D: memlist VRAM → GPU VA в FERMI_VASPACE_A ---
+                   Шаг 1: объект VirtualMemory (NV01_MEMORY_VIRTUAL), ссылающийся на
+                   наш vaspace — это и есть hDma для MAP_MEMORY_DMA (не сам vaspace).
+                   Шаг 2: MAP_MEMORY_DMA с dmaOffset=0, flags=0 — RM сам выбирает VA. */
+                if (l3_vram_ok && l3_vaspace_ok) {
+                    uint32_t hvmem = 0, vmst = 0xffffffffu;
+                    int vmrc = nv_gsp_rm_vmem_ctor(&ch, hcli, hdev, hva, &hvmem, &vmst);
+                    int vmem_ok = (vmrc == NV_GSP_RM_OK && vmst == 0);
+                    printf("СЛОЙ 3D: NV01_MEMORY_VIRTUAL rc=%d status=0x%x handle=0x%08x%s\n",
+                           vmrc, vmst, hvmem, vmem_ok ? "" : "  (не OK)");
+                    if (vmem_ok) {
+                        uint64_t gpu_va = 0;
+                        uint32_t mapst = 0xffffffffu, mapres = 0xffffffffu;
+                        int maprc = nv_gsp_rm_map_memory_dma(&ch, hcli, hdev, hvmem, hmem,
+                                                            0, vsize, NVOS46_FLAGS_DEFAULT,
+                                                            &gpu_va, &mapst, &mapres);
+                        l3_map_ok = (maprc == NV_GSP_RM_OK && mapres == 0 &&
+                                     mapst == 0 && gpu_va != 0);
+                        printf("СЛОЙ 3D: MAP_MEMORY_DMA rc=%d rpc_result=0x%x status=0x%x GPU_VA=0x%llx%s\n",
+                               maprc, mapres, mapst, (unsigned long long)gpu_va,
+                               l3_map_ok ? "" : "  (не OK)");
+                    }
+                }
             } else {
                 printf("СЛОЙ 3C: не нашёл usable FB-региона под 1 МиБ\n");
             }
         }
 
-        printf("СЛОЙ 3: итог — static_info=%s, RM-цепочка=%s, FB-control=%s, vaspace=%s, VRAM-alloc=%s\n",
+        printf("СЛОЙ 3: итог — static_info=%s, RM-цепочка=%s, FB-control=%s, vaspace=%s, VRAM-alloc=%s, VRAM-map=%s\n",
                l3_static_ok?"OK":"нет", l3_chain_ok?"OK":"нет",
-               l3_ctrl_ok?"OK":"нет", l3_vaspace_ok?"OK":"нет", l3_vram_ok?"OK":"нет");
+               l3_ctrl_ok?"OK":"нет", l3_vaspace_ok?"OK":"нет",
+               l3_vram_ok?"OK":"нет", l3_map_ok?"OK":"нет");
     }
 
     /* --- диагностика: тронул ли GSP очереди/логи --- */
@@ -616,6 +642,8 @@ static int run(const nv_mmio_t *io, struct arena *ar, const char *bdf)
                    l3_ctrl_ok?"OK":"нет", l3_vaspace_ok?"OK":"нет");
         if (l3_vram_ok)
             printf("*** СЛОЙ 3 (проход C): регистрация VRAM-объекта (NV01_MEMORY_LIST_FBMEM) — OK ***\n");
+        if (l3_map_ok)
+            printf("*** СЛОЙ 3 (проход D): VRAM смаппирован в FERMI_VASPACE_A — GPU VA получен ***\n");
         return 0;
     }
     if (brc==NV_OK && mb0==0 && active){
