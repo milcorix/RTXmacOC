@@ -242,12 +242,37 @@ static void test_device_info(void)
     CHECK(ld32(cp + NV_RM_CTRL_PARAMSIZE_OFF) == NV_FIFO_DEVINFO_PARAMS_SIZE, "paramsSize == 3212");
 }
 
+/* --- тест B: CE-объект (NVB0B5_ALLOCATION_PARAMETERS) --- */
+static void test_ce_obj(void)
+{
+    printf("[test_ce_obj]\n");
+    nv_gsp_rpc_chan ch; chan_init(&ch);
+    uint8_t rep[NV_RM_ALLOC_HDR_SIZE]; memset(rep, 0, sizeof(rep));  /* status=0 */
+    put_msg(g_shm, &ch.lay, 0, NV_VGPU_MSG_FUNCTION_GSP_RM_ALLOC, 0, rep, sizeof(rep), 1);
+    set_msgq_wptr(g_shm, &ch.lay, 1);
+
+    uint32_t hce = NV_GSP_RM_CE_OBJ_HANDLE | 0u, st = 0xffffffffu;
+    int rc = nv_gsp_rm_ce_obj_alloc(&ch, NV_GSP_RM_CLIENT_HANDLE,
+                                    NV_GSP_RM_CHANNEL_HANDLE | 0u, hce,
+                                    AMPERE_DMA_COPY_B, 0x9, &st);
+    CHECK(rc == NV_GSP_RM_OK && st == 0, "ce_obj_alloc OK");
+    const uint8_t *ce = g_shm + ch.lay.cmdq_off + NV_GSP_QUEUE_ENTRYOFF + 0;
+    const uint8_t *al = ce + NV_GSP_RPC_PAYLOAD_OFF;
+    const uint8_t *pp = al + NV_RM_ALLOC_HDR_SIZE;
+    CHECK(ld32(al + NV_RM_ALLOC_HCLASS_OFF) == AMPERE_DMA_COPY_B, "hClass == AMPERE_DMA_COPY_B (0xC7B5)");
+    CHECK(ld32(al + NV_RM_ALLOC_HPARENT_OFF) == (NV_GSP_RM_CHANNEL_HANDLE | 0u), "hParent == канал");
+    CHECK(ld32(al + NV_RM_ALLOC_PARAMSIZE_OFF) == NVB0B5_ALLOC_PARAMS_SIZE, "paramsSize == 8");
+    CHECK(ld32(pp + NVB0B5_ALLOC_VERSION_OFF) == NVB0B5_ALLOCATION_PARAMETERS_VERSION_1, "version == 1");
+    CHECK(ld32(pp + NVB0B5_ALLOC_ENGINETYPE_OFF) == 0x9, "engineType == 0x9 (CE0)");
+}
+
 int main(void)
 {
     test_layout();
     test_device_info();
     test_channel_alloc();
     test_bind_schedule();
+    test_ce_obj();
     printf(failed ? "\n=== gsp_fifo_test: ЕСТЬ ПРОВАЛЫ ===\n" : "\n=== gsp_fifo_test: ВСЕ ТЕСТЫ ПРОШЛИ ===\n");
     return failed ? 1 : 0;
 }

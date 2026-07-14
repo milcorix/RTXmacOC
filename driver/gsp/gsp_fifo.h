@@ -30,6 +30,13 @@
 #define NV_GSP_RM_CHANNEL_HANDLE   0xf1f00000u   /* | chid (как nouveau) */
 #define NV_GSP_RM_CE_OBJ_HANDLE    0x0000ce00u   /* | inst — объект copy-engine */
 
+/* NVB0B5_ALLOCATION_PARAMETERS (clb0b5sw.h, 8б): version@0, engineType@4.
+   VERSION_1 → engineType интерпретируется как NV2080_ENGINE_TYPE-ординал (наш CE0=0x9). */
+#define NVB0B5_ALLOC_PARAMS_SIZE       8u
+#define NVB0B5_ALLOC_VERSION_OFF       0u
+#define NVB0B5_ALLOC_ENGINETYPE_OFF    4u
+#define NVB0B5_ALLOCATION_PARAMETERS_VERSION_1  1u
+
 /* --- NV_CHANNEL_ALLOC_PARAMS (alloc_channel.h, sizeof=360, compile-probe) ---
    NV_DECLARE_ALIGNED(..,8), NV_MAX_SUBDEVICES=8. */
 #define NV_CHANNEL_ALLOC_PARAMS_SIZE   360u
@@ -173,5 +180,14 @@ int nv_gsp_rm_channel_schedule(nv_gsp_rpc_chan *ch, uint32_t hClient, uint32_t h
  */
 int nv_gsp_rm_engine_obj_alloc(nv_gsp_rpc_chan *ch, uint32_t hClient, uint32_t hChannel,
                                uint32_t hObject, uint32_t engineClass, uint32_t *status);
+
+/*
+ * Проход B (copy-engine): аллокация объекта CE (класс AMPERE_DMA_COPY_B) на канале
+ * hChannel с NVB0B5_ALLOCATION_PARAMETERS{version=1, engineType}. engineType —
+ * NV2080-ординал CE из device-info (A0). *out_obj ← хэндл, *status ← статус RM.
+ */
+int nv_gsp_rm_ce_obj_alloc(nv_gsp_rpc_chan *ch, uint32_t hClient, uint32_t hChannel,
+                           uint32_t hObject, uint32_t engineClass, uint32_t engineType,
+                           uint32_t *status);
 
 #endif /* RTXMACOC_GSP_FIFO_H */

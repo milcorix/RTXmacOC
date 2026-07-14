@@ -144,3 +144,16 @@ int nv_gsp_rm_engine_obj_alloc(nv_gsp_rpc_chan *ch, uint32_t hClient, uint32_t h
     /* Объект движка вешается на канал (hParent=канал). params пустые. */
     return nv_gsp_rm_alloc(ch, hClient, hChannel, hObject, engineClass, NULL, 0, status);
 }
+
+int nv_gsp_rm_ce_obj_alloc(nv_gsp_rpc_chan *ch, uint32_t hClient, uint32_t hChannel,
+                           uint32_t hObject, uint32_t engineClass, uint32_t engineType,
+                           uint32_t *status)
+{
+    if (!ch) return NV_GSP_RM_ERR_ARG;
+    /* NVB0B5_ALLOCATION_PARAMETERS: version=1 (engineType = NV2080-ординал). */
+    uint8_t p[NVB0B5_ALLOC_PARAMS_SIZE];
+    for (unsigned i = 0; i < sizeof(p); i++) p[i] = 0;
+    st32(p + NVB0B5_ALLOC_VERSION_OFF,    NVB0B5_ALLOCATION_PARAMETERS_VERSION_1);
+    st32(p + NVB0B5_ALLOC_ENGINETYPE_OFF, engineType);
+    return nv_gsp_rm_alloc(ch, hClient, hChannel, hObject, engineClass, p, sizeof(p), status);
+}

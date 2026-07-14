@@ -477,6 +477,7 @@ static int run(const nv_mmio_t *io, struct arena *ar, const char *bdf)
     int l3_static_ok = 0, l3_chain_ok = 0, l3_ctrl_ok = 0, l3_vaspace_ok = 0;
     int l3_vram_ok = 0, l3_map_ok = 0;
     int l4_devinfo_ok = 0, l4_ce_engtype = -1, l4_chan_ok = 0, l4_bind_ok = 0, l4_sched_ok = 0;
+    int l4_ce_obj_ok = 0;
     if (got) {
         nv_gsp_rpc_chan ch;
         memset(&ch, 0, sizeof(ch));
@@ -702,6 +703,18 @@ static int run(const nv_mmio_t *io, struct arena *ar, const char *bdf)
                                 l4_sched_ok = (src4 == NV_GSP_RM_OK && sst == 0);
                                 printf("СЛОЙ 4 A2: GPFIFO_SCHEDULE(enable) rc=%d status=0x%x%s\n",
                                        src4, sst, l4_sched_ok ? "" : "  (не OK)");
+
+                                /* --- ПРОХОД B: объект copy-engine (AMPERE_DMA_COPY_B) на канале ---
+                                   NVB0B5_ALLOCATION_PARAMETERS{version=1, engineType=CE0}. */
+                                if (l4_sched_ok) {
+                                    uint32_t hce = NV_GSP_RM_CE_OBJ_HANDLE | 0u, cest = 0xffffffffu;
+                                    int cerc = nv_gsp_rm_ce_obj_alloc(&ch, hcli, hchan, hce,
+                                                                      AMPERE_DMA_COPY_B,
+                                                                      cfg.engineType, &cest);
+                                    l4_ce_obj_ok = (cerc == NV_GSP_RM_OK && cest == 0);
+                                    printf("СЛОЙ 4 B: CE-объект (AMPERE_DMA_COPY_B) rc=%d status=0x%x handle=0x%08x%s\n",
+                                           cerc, cest, hce, l4_ce_obj_ok ? "" : "  (не OK)");
+                                }
                             }
                         }
                     }
@@ -765,6 +778,8 @@ static int run(const nv_mmio_t *io, struct arena *ar, const char *bdf)
         if (l4_devinfo_ok)
             printf("*** СЛОЙ 4 (проход A0): FIFO device-info прочитан — движки GPU перечислены%s ***\n",
                    (l4_ce_engtype >= 0) ? ", CE0 найден" : "");
+        if (l4_ce_obj_ok)
+            printf("*** СЛОЙ 4 (проход B): объект copy-engine (AMPERE_DMA_COPY_B) на канале — OK ***\n");
         if (l4_sched_ok)
             printf("*** СЛОЙ 4 (проход A): канал GPFIFO создан+bind+schedule (CE0) — ПЕРВЫЙ КАНАЛ НА ЖЕЛЕЗЕ ***\n");
         else if (l4_chan_ok)
