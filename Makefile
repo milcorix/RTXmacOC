@@ -17,7 +17,7 @@ PROBE_BIN = pcie_probe
 DUMP_DIR  = docs/hw-dumps
 DATE     := $(shell date +%Y%m%d)
 
-.PHONY: probe run dump clean mmio-linux vbios-dump booter-parse-test booter-run-linux gsp-stage-test gsp-boot-linux gsp-rpc-test gsp-rm-test
+.PHONY: probe run dump clean mmio-linux vbios-dump booter-parse-test booter-run-linux gsp-stage-test gsp-boot-linux gsp-rpc-test gsp-rm-test gmmu-test
 
 probe: $(PROBE_BIN)
 
@@ -69,6 +69,12 @@ gsp-rpc-test:
 #   make gsp-rm-test && ./tools/gsp_rm_test
 gsp-rm-test:
 	cc -Wall -Wextra -O2 tools/gsp_rm_test.c driver/gsp/gsp_rm.c driver/gsp/gsp_rpc.c -o tools/gsp_rm_test
+
+# Офлайн-тест прямого GMMU (проход D): PRAMIN-окно, кодирование PTE/PDE, построение
+# таблиц с read-back. Без GPU.
+#   make gmmu-test && ./tools/gmmu_test
+gmmu-test:
+	cc -Wall -Wextra -O2 tools/gmmu_test.c driver/gsp/gmmu.c -o tools/gmmu_test
 
 # Чтение/разбор VBIOS карты (слой 2, шаг 1). Портируемо, собирается любым cc.
 #   make vbios-dump && ./tools/vbios_dump <rom_file>
