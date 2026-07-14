@@ -477,7 +477,7 @@ static int run(const nv_mmio_t *io, struct arena *ar, const char *bdf)
     int l3_static_ok = 0, l3_chain_ok = 0, l3_ctrl_ok = 0, l3_vaspace_ok = 0;
     int l3_vram_ok = 0, l3_map_ok = 0;
     int l4_devinfo_ok = 0, l4_ce_engtype = -1, l4_chan_ok = 0, l4_bind_ok = 0, l4_sched_ok = 0;
-    int l4_ce_obj_ok = 0;
+    int l4_ce_obj_ok = 0, l4_exec_ok = 0; uint32_t l4_ce_runlist = 0;
     if (got) {
         nv_gsp_rpc_chan ch;
         memset(&ch, 0, sizeof(ch));
@@ -551,6 +551,7 @@ static int run(const nv_mmio_t *io, struct arena *ar, const char *bdf)
                     int ce = nv_gsp_fifo_find_engine(&di, RM_ENGINE_TYPE_COPY0);
                     if (ce >= 0) {
                         l4_ce_engtype = (int)di.engines[ce].rm_engine_type;
+                        l4_ce_runlist = di.engines[ce].runlist;
                         printf("СЛОЙ 4 A0: CE0 найден — engineType=0x%x runlist=%u (для канала A2)\n",
                                l4_ce_engtype, di.engines[ce].runlist);
                     } else {
@@ -715,6 +716,43 @@ static int run(const nv_mmio_t *io, struct arena *ar, const char *bdf)
                                     printf("СЛОЙ 4 B: CE-объект (AMPERE_DMA_COPY_B) rc=%d status=0x%x handle=0x%08x%s\n",
                                            cerc, cest, hce, l4_ce_obj_ok ? "" : "  (не OK)");
                                 }
+
+                                /* ============ ПРОХОД C: исполнить команду GPU ============
+                                   Host-релиз семафора через pushbuffer. Разметка в замапленном
+                                   регионе (va→vphys): GPFIFO ring @+0, pushbuffer @+0x1000,
+                                   семафор @+0x2000. Пишем PB/entry/GP_PUT через PRAMIN, звоним
+                                   в doorbell, ждём семафор. Порт clc56f.h (NVC56F host sem). */
+                                if (l4_sched_ok) {
+                                    uint64_t pb_va   = va    + 0x1000ull, pb_phys  = vphys + 0x1000ull;
+                                    uint64_t sem_va  = va    + 0x2000ull, sem_phys = vphys + 0x2000ull;
+                                    uint32_t payload = 0xcafe0001u;
+
+                                    nv_pramin_wr32(io, &win, sem_phys, 0u);          /* семафор=0 */
+                                    uint32_t pb[8];
+                                    uint32_t nd = nv_gsp_fifo_build_sem_release(pb, sem_va, payload);
+                                    for (uint32_t i = 0; i < nd; i++)
+                                        nv_pramin_wr32(io, &win, pb_phys + i * 4u, pb[i]);
+                                    /* GPFIFO entry[0] → pushbuffer. */
+                                    uint32_t e0 = 0, e1 = 0;
+                                    nv_gsp_fifo_gpfifo_entry(pb_va, nd, &e0, &e1);
+                                    nv_pramin_wr32(io, &win, vphys + 0u, e0);
+                                    nv_pramin_wr32(io, &win, vphys + 4u, e1);
+                                    /* USERD GP_PUT = 1 (одна запись доступна). */
+                                    nv_pramin_wr32(io, &win, userd_phys + NV_USERD_GP_PUT_OFF, 1u);
+                                    /* Doorbell: token = (runlistId<<16)|chid. */
+                                    uint32_t token = (l4_ce_runlist << 16) | cfg.chid;
+                                    io->wr(io->ctx, NV_VFN_DOORBELL_ADDR, token);
+                                    /* Ждём релиз семафора (до 2с). */
+                                    uint32_t got = 0;
+                                    for (int i = 0; i < 2000; i++) {
+                                        got = nv_pramin_rd32(io, &win, sem_phys);
+                                        if (got == payload) { l4_exec_ok = 1; break; }
+                                        bar_udelay(NULL, 1000);
+                                    }
+                                    printf("СЛОЙ 4 C: sem-release payload=0x%x got=0x%x doorbell(0x%x)=0x%x %s\n",
+                                           payload, got, NV_VFN_DOORBELL_ADDR, token,
+                                           l4_exec_ok ? "★ ИСПОЛНЕНО ★" : "(нет релиза)");
+                                }
                             }
                         }
                     }
@@ -780,6 +818,8 @@ static int run(const nv_mmio_t *io, struct arena *ar, const char *bdf)
                    (l4_ce_engtype >= 0) ? ", CE0 найден" : "");
         if (l4_ce_obj_ok)
             printf("*** СЛОЙ 4 (проход B): объект copy-engine (AMPERE_DMA_COPY_B) на канале — OK ***\n");
+        if (l4_exec_ok)
+            printf("*** СЛОЙ 4 (проход C): pushbuffer исполнен — host-семафор released ПЕРВАЯ КОМАНДА GPU ***\n");
         if (l4_sched_ok)
             printf("*** СЛОЙ 4 (проход A): канал GPFIFO создан+bind+schedule (CE0) — ПЕРВЫЙ КАНАЛ НА ЖЕЛЕЗЕ ***\n");
         else if (l4_chan_ok)

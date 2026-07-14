@@ -181,6 +181,34 @@ int nv_gsp_rm_channel_schedule(nv_gsp_rpc_chan *ch, uint32_t hClient, uint32_t h
 int nv_gsp_rm_engine_obj_alloc(nv_gsp_rpc_chan *ch, uint32_t hClient, uint32_t hChannel,
                                uint32_t hObject, uint32_t engineClass, uint32_t *status);
 
+/* ===================== Проход C: submit pushbuffer + host-семафор ===================== */
+
+/* USERD (Nvc56fControl, clc56f.h): GPPut @0x8c (индекс GPFIFO put). */
+#define NV_USERD_GP_PUT_OFF        0x8cu
+
+/* Doorbell (nouveau tu102/ga100 vfn): wr32(vfn.user + 0x90, token). vfn base 0xb80000,
+   user@0x030000 → 0xbb0000; doorbell = 0xbb0090. token = (runlistId<<16)|chid. */
+#define NV_VFN_DOORBELL_ADDR       0x00bb0090u
+
+/* Host-методы семафора NVC56F (clc56f.h), байтовые смещения (в pushbuffer addr=off>>2). */
+#define NVC56F_SEM_ADDR_LO         0x5cu   /* OFFSET 31:2 */
+#define NVC56F_SEM_ADDR_HI         0x60u   /* OFFSET 7:0  */
+#define NVC56F_SEM_PAYLOAD_LO      0x64u
+#define NVC56F_SEM_PAYLOAD_HI      0x68u
+#define NVC56F_SEM_EXECUTE         0x6cu
+#define NVC56F_SEM_EXECUTE_OPERATION_RELEASE  0x1u
+#define NVC56F_SEM_EXECUTE_RELEASE_WFI_EN     (1u << 20)
+/* Инкрементирующий метод-заголовок: OPCODE(31:29)=1, COUNT(28:16), SUBCH(15:13), ADDR(11:0). */
+#define NVC56F_DMA_INCR_OPCODE_VALUE          0x1u
+/* GPFIFO-запись (clc56f.h): e0 = GET(31:2)=pb_va[31:2]; e1 = GET_HI(7:0)=pb_va[39:32] | LENGTH(30:10)=dwords. */
+
+/* Собрать pushbuffer host-релиза семафора: SEM_ADDR_LO/HI, PAYLOAD_LO/HI, EXECUTE(RELEASE|WFI).
+   pb — массив ≥6 u32; возврат числа заполненных dword (6). Порт формата NVC56F. */
+uint32_t nv_gsp_fifo_build_sem_release(uint32_t *pb, uint64_t sem_va, uint32_t payload);
+
+/* Собрать 8-байтную GPFIFO-запись на pushbuffer pb_va длиной pb_dwords → *e0,*e1. */
+void nv_gsp_fifo_gpfifo_entry(uint64_t pb_va, uint32_t pb_dwords, uint32_t *e0, uint32_t *e1);
+
 /*
  * Проход B (copy-engine): аллокация объекта CE (класс AMPERE_DMA_COPY_B) на канале
  * hChannel с NVB0B5_ALLOCATION_PARAMETERS{version=1, engineType}. engineType —

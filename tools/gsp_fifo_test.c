@@ -266,12 +266,39 @@ static void test_ce_obj(void)
     CHECK(ld32(pp + NVB0B5_ALLOC_ENGINETYPE_OFF) == 0x9, "engineType == 0x9 (CE0)");
 }
 
+/* --- тест C: pushbuffer host-семафор + GPFIFO-запись --- */
+static void test_pushbuffer(void)
+{
+    printf("[test_pushbuffer]\n");
+    uint32_t pb[8];
+    uint64_t sem_va = 0x0000000020002000ull;
+    uint32_t payload = 0xcafe0001u;
+    uint32_t nd = nv_gsp_fifo_build_sem_release(pb, sem_va, payload);
+    CHECK(nd == 6, "pushbuffer = 6 dword");
+    /* header: OPCODE=1(31:29), COUNT=5(28:16), SUBCH=0, ADDR=0x17 → 0x20050017 */
+    CHECK(pb[0] == 0x20050017u, "INC_METHOD header (count=5, addr=SEM_ADDR_LO>>2)");
+    CHECK(pb[1] == (uint32_t)(sem_va & 0xfffffffcu), "SEM_ADDR_LO");
+    CHECK(pb[2] == (uint32_t)((sem_va >> 32) & 0xffu), "SEM_ADDR_HI");
+    CHECK(pb[3] == payload, "SEM_PAYLOAD_LO");
+    CHECK(pb[4] == 0, "SEM_PAYLOAD_HI");
+    CHECK(pb[5] == (NVC56F_SEM_EXECUTE_OPERATION_RELEASE | NVC56F_SEM_EXECUTE_RELEASE_WFI_EN),
+          "SEM_EXECUTE = RELEASE|WFI_EN");
+
+    uint32_t e0 = 0, e1 = 0;
+    uint64_t pb_va = 0x0000000020001000ull;
+    nv_gsp_fifo_gpfifo_entry(pb_va, nd, &e0, &e1);
+    CHECK(e0 == (uint32_t)(pb_va & 0xfffffffcu), "GP_ENTRY0 = pb_va[31:2]");
+    CHECK(e1 == (((uint32_t)((pb_va >> 32) & 0xffu)) | (nd << 10)), "GP_ENTRY1 = va_hi | (len<<10)");
+    CHECK(((e1 >> 10) & 0x1fffffu) == 6, "GP_ENTRY1 LENGTH == 6 dword");
+}
+
 int main(void)
 {
     test_layout();
     test_device_info();
     test_channel_alloc();
     test_bind_schedule();
+    test_pushbuffer();
     test_ce_obj();
     printf(failed ? "\n=== gsp_fifo_test: ЕСТЬ ПРОВАЛЫ ===\n" : "\n=== gsp_fifo_test: ВСЕ ТЕСТЫ ПРОШЛИ ===\n");
     return failed ? 1 : 0;

@@ -145,6 +145,27 @@ int nv_gsp_rm_engine_obj_alloc(nv_gsp_rpc_chan *ch, uint32_t hClient, uint32_t h
     return nv_gsp_rm_alloc(ch, hClient, hChannel, hObject, engineClass, NULL, 0, status);
 }
 
+uint32_t nv_gsp_fifo_build_sem_release(uint32_t *pb, uint64_t sem_va, uint32_t payload)
+{
+    uint32_t n = 0;
+    /* INC_METHOD: 5 методов подряд с SEM_ADDR_LO (0x5c>>2=0x17), subch 0. */
+    pb[n++] = (NVC56F_DMA_INCR_OPCODE_VALUE << 29) | (5u << 16) | (0u << 13)
+            | ((NVC56F_SEM_ADDR_LO >> 2) & 0xfffu);
+    pb[n++] = (uint32_t)(sem_va & 0xfffffffcu);         /* SEM_ADDR_LO (31:2) */
+    pb[n++] = (uint32_t)((sem_va >> 32) & 0xffu);       /* SEM_ADDR_HI (7:0) */
+    pb[n++] = payload;                                  /* SEM_PAYLOAD_LO */
+    pb[n++] = 0u;                                       /* SEM_PAYLOAD_HI (32-бит payload) */
+    pb[n++] = NVC56F_SEM_EXECUTE_OPERATION_RELEASE | NVC56F_SEM_EXECUTE_RELEASE_WFI_EN;
+    return n;   /* 6 */
+}
+
+void nv_gsp_fifo_gpfifo_entry(uint64_t pb_va, uint32_t pb_dwords, uint32_t *e0, uint32_t *e1)
+{
+    if (e0) *e0 = (uint32_t)(pb_va & 0xfffffffcu);                  /* GET (31:2) */
+    if (e1) *e1 = (uint32_t)((pb_va >> 32) & 0xffu)                 /* GET_HI (7:0) */
+              | ((pb_dwords & 0x1fffffu) << 10);                    /* LENGTH (30:10) */
+}
+
 int nv_gsp_rm_ce_obj_alloc(nv_gsp_rpc_chan *ch, uint32_t hClient, uint32_t hChannel,
                            uint32_t hObject, uint32_t engineClass, uint32_t engineType,
                            uint32_t *status)
