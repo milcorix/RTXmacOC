@@ -476,7 +476,7 @@ static int run(const nv_mmio_t *io, struct arena *ar, const char *bdf)
        GET_GSP_STATIC_INFO (карта FB-регионов), затем цепочку RM client→device→subdevice. */
     int l3_static_ok = 0, l3_chain_ok = 0, l3_ctrl_ok = 0, l3_vaspace_ok = 0;
     int l3_vram_ok = 0, l3_map_ok = 0;
-    int l4_devinfo_ok = 0, l4_ce_engtype = -1;
+    int l4_devinfo_ok = 0, l4_ce_engtype = -1, l4_chan_ok = 0, l4_bind_ok = 0, l4_sched_ok = 0;
     if (got) {
         nv_gsp_rpc_chan ch;
         memset(&ch, 0, sizeof(ch));
@@ -527,6 +527,39 @@ static int run(const nv_mmio_t *io, struct arena *ar, const char *bdf)
 
         /* ===== ПРОХОД B: работа с памятью через RPC ===== */
         if (l3_chain_ok) {
+            /* --- СЛОЙ 4 A0: таблица движков (FIFO_GET_DEVICE_INFO_TABLE) — до канала ---
+               Читаем список движков GPU, берём engineType CE0 для канала (A2).
+               Порт r535_fifo_runl_ctor. */
+            {
+                nv_gsp_fifo_devinfo di;
+                uint32_t dst = 0xffffffffu;
+                int drc = nv_gsp_fifo_get_device_info(&ch, hcli, hsub, &di, &dst);
+                if (drc == NV_GSP_RM_OK && dst == 0) {
+                    l4_devinfo_ok = 1;
+                    printf("СЛОЙ 4 A0: FIFO device-info OK — движков: %u\n", di.count);
+                    for (uint32_t i = 0; i < di.count; i++) {
+                        uint32_t rt = di.engines[i].rm_engine_type;
+                        const char *nm = "?";
+                        if (rt == RM_ENGINE_TYPE_GR0) nm = "GR0";
+                        else if (rt >= RM_ENGINE_TYPE_COPY0 && rt <= RM_ENGINE_TYPE_COPY9) nm = "COPYx";
+                        else if (rt == RM_ENGINE_TYPE_SW) nm = "SW";
+                        printf("  engn[%02u] rm_type=0x%02x(%s) runlist=%u pri_base=0x%x eng_desc=0x%x\n",
+                               i, rt, nm, di.engines[i].runlist,
+                               di.engines[i].runlist_pri_base, di.engines[i].eng_desc);
+                    }
+                    int ce = nv_gsp_fifo_find_engine(&di, RM_ENGINE_TYPE_COPY0);
+                    if (ce >= 0) {
+                        l4_ce_engtype = (int)di.engines[ce].rm_engine_type;
+                        printf("СЛОЙ 4 A0: CE0 найден — engineType=0x%x runlist=%u (для канала A2)\n",
+                               l4_ce_engtype, di.engines[ce].runlist);
+                    } else {
+                        printf("СЛОЙ 4 A0: COPY0 в таблице не найден\n");
+                    }
+                } else {
+                    printf("СЛОЙ 4 A0: FIFO device-info FAIL rc=%d status=0x%x\n", drc, dst);
+                }
+            }
+
             /* --- B-метрика №1: RM_CONTROL FB_GET_INFO_V2 — конфиг VRAM/heap с GSP --- */
             uint32_t idx[5] = { NV2080_CTRL_FB_INFO_INDEX_RAM_SIZE,
                                 NV2080_CTRL_FB_INFO_INDEX_TOTAL_RAM_SIZE,
@@ -616,6 +649,61 @@ static int run(const nv_mmio_t *io, struct arena *ar, const char *bdf)
                                (unsigned long long)pte, (unsigned long long)want,
                                (int)(pte & NV_GMMU_PTE_VALID),
                                (pte == want) ? "MATCH" : "MISMATCH");
+
+                        /* ============ СЛОЙ 4 A1+A2: канал GPFIFO (CE0) ============
+                           A1: буферы во VRAM (instance/RAMFC, USERD, method-buffer) —
+                           физ-адреса за page-tables; кольцо GPFIFO — в уже замапленном
+                           VA-регионе (va→vphys, проход D), gpFifoOffset=va.
+                           A2: channel_alloc(AMPERE_CHANNEL_GPFIFO_A) + BIND + SCHEDULE.
+                           Порт r535_chan_ramfc_write. */
+                        if (l3_map_ok && l4_ce_engtype >= 0) {
+                            uint64_t buf_base = pt_base + 0x10000ull;      /* за 5 таблицами */
+                            uint64_t inst_phys   = buf_base + 0x0000ull;   /* instance+RAMFC */
+                            uint64_t userd_phys  = buf_base + 0x1000ull;
+                            uint64_t mthd_phys   = buf_base + 0x2000ull;   /* method-buffer */
+                            uint64_t inst_size = 0x1000, userd_size = 0x200, mthd_size = 0x5000;
+                            /* userdMem.size=0x200 (один канал, gv100_chan_userd),
+                               instance=0x1000 (gf100_chan_inst), mthdbuf≈0x5000 —
+                               как r535_chan_ramfc_write; TODO: verify HW. */
+                            /* Обнулить буферы во VRAM через PRAMIN (win из прохода D). */
+                            nv_pramin_fill(io, &win, inst_phys,  (uint32_t)inst_size,  0);
+                            nv_pramin_fill(io, &win, userd_phys, (uint32_t)userd_size, 0);
+                            nv_pramin_fill(io, &win, mthd_phys,  (uint32_t)mthd_size,  0);
+                            /* Кольцо GPFIFO — начало замапленного региона (phys vphys, VA va). */
+                            uint32_t gpfifo_entries = 0x100;               /* 256 записей = 2 КиБ */
+                            nv_pramin_fill(io, &win, vphys, gpfifo_entries * 8u, 0);
+
+                            nv_gsp_chan_cfg cfg; memset(&cfg, 0, sizeof(cfg));
+                            cfg.hClient = hcli; cfg.hDevice = hdev; cfg.hVASpace = hva;
+                            cfg.chid = 0; cfg.engineType = (uint32_t)l4_ce_engtype;
+                            cfg.gpfifo_va = va; cfg.gpfifo_entries = gpfifo_entries;
+                            cfg.inst_phys = inst_phys;   cfg.inst_size = inst_size;
+                            cfg.userd_phys = userd_phys; cfg.userd_size = userd_size;
+                            cfg.ramfc_size = 0x200;
+                            cfg.mthdbuf_phys = mthd_phys; cfg.mthdbuf_size = mthd_size;
+                            cfg.mthdbuf_sysmem = 0; cfg.priv = 1;
+
+                            uint32_t hchan = 0, chst = 0xffffffffu;
+                            int chrc = nv_gsp_rm_channel_alloc(&ch, &cfg, &hchan, &chst);
+                            l4_chan_ok = (chrc == NV_GSP_RM_OK && chst == 0);
+                            printf("СЛОЙ 4 A2: channel_alloc rc=%d status=0x%x handle=0x%08x engineType=0x%x%s\n",
+                                   chrc, chst, hchan, cfg.engineType, l4_chan_ok ? "" : "  (не OK)");
+
+                            if (l4_chan_ok) {
+                                uint32_t bst = 0xffffffffu;
+                                int brc4 = nv_gsp_rm_channel_bind(&ch, hcli, hchan,
+                                                                  cfg.engineType, &bst);
+                                l4_bind_ok = (brc4 == NV_GSP_RM_OK && bst == 0);
+                                printf("СЛОЙ 4 A2: BIND rc=%d status=0x%x%s\n",
+                                       brc4, bst, l4_bind_ok ? "" : "  (не OK)");
+
+                                uint32_t sst = 0xffffffffu;
+                                int src4 = nv_gsp_rm_channel_schedule(&ch, hcli, hchan, 1, &sst);
+                                l4_sched_ok = (src4 == NV_GSP_RM_OK && sst == 0);
+                                printf("СЛОЙ 4 A2: GPFIFO_SCHEDULE(enable) rc=%d status=0x%x%s\n",
+                                       src4, sst, l4_sched_ok ? "" : "  (не OK)");
+                            }
+                        }
                     }
                 }
             } else {
@@ -628,39 +716,6 @@ static int run(const nv_mmio_t *io, struct arena *ar, const char *bdf)
                l3_ctrl_ok?"OK":"нет", l3_vaspace_ok?"OK":"нет",
                l3_vram_ok?"OK":"нет", l3_map_ok?"OK":"нет");
 
-        /* ===================== СЛОЙ 4 (проход A0): таблица движков =====================
-           FIFO_GET_DEVICE_INFO_TABLE на нашем subdevice → список движков GPU
-           (GR/CE/NVDEC/...) с RM_ENGINE_TYPE/runlist. Из него берём engineType
-           для будущего канала (A2). Порт r535_fifo_runl_ctor. */
-        if (l3_chain_ok) {
-            nv_gsp_fifo_devinfo di;
-            uint32_t dst = 0xffffffffu;
-            int drc = nv_gsp_fifo_get_device_info(&ch, hcli, hsub, &di, &dst);
-            if (drc == NV_GSP_RM_OK && dst == 0) {
-                l4_devinfo_ok = 1;
-                printf("СЛОЙ 4 A0: FIFO device-info OK — движков: %u\n", di.count);
-                for (uint32_t i = 0; i < di.count; i++) {
-                    uint32_t rt = di.engines[i].rm_engine_type;
-                    const char *nm = "?";
-                    if (rt == RM_ENGINE_TYPE_GR0) nm = "GR0";
-                    else if (rt >= RM_ENGINE_TYPE_COPY0 && rt <= RM_ENGINE_TYPE_COPY9) nm = "COPYx";
-                    else if (rt == RM_ENGINE_TYPE_SW) nm = "SW";
-                    printf("  engn[%02u] rm_type=0x%02x(%s) runlist=%u pri_base=0x%x eng_desc=0x%x\n",
-                           i, rt, nm, di.engines[i].runlist,
-                           di.engines[i].runlist_pri_base, di.engines[i].eng_desc);
-                }
-                int ce = nv_gsp_fifo_find_engine(&di, RM_ENGINE_TYPE_COPY0);
-                if (ce >= 0) {
-                    l4_ce_engtype = (int)di.engines[ce].rm_engine_type;
-                    printf("СЛОЙ 4 A0: CE0 найден — engineType=0x%x runlist=%u (для канала A2)\n",
-                           l4_ce_engtype, di.engines[ce].runlist);
-                } else {
-                    printf("СЛОЙ 4 A0: COPY0 в таблице не найден\n");
-                }
-            } else {
-                printf("СЛОЙ 4 A0: FIFO device-info FAIL rc=%d status=0x%x\n", drc, dst);
-            }
-        }
     }
 
     /* --- диагностика: тронул ли GSP очереди/логи --- */
@@ -710,6 +765,11 @@ static int run(const nv_mmio_t *io, struct arena *ar, const char *bdf)
         if (l4_devinfo_ok)
             printf("*** СЛОЙ 4 (проход A0): FIFO device-info прочитан — движки GPU перечислены%s ***\n",
                    (l4_ce_engtype >= 0) ? ", CE0 найден" : "");
+        if (l4_sched_ok)
+            printf("*** СЛОЙ 4 (проход A): канал GPFIFO создан+bind+schedule (CE0) — ПЕРВЫЙ КАНАЛ НА ЖЕЛЕЗЕ ***\n");
+        else if (l4_chan_ok)
+            printf("*** СЛОЙ 4 (проход A): channel_alloc OK; bind=%s schedule=%s ***\n",
+                   l4_bind_ok?"OK":"нет", l4_sched_ok?"OK":"нет");
         return 0;
     }
     if (brc==NV_OK && mb0==0 && active){
