@@ -236,9 +236,16 @@ WPR2-границы, GFW boot, `NV_PGSP_QUEUE_HEAD`.
 - Классы Ada сверены с `nvif/class.h`: канал 0xC56F, CE 0xC7B5, GR `ADA_A 0xC997`,
   compute `ADA_COMPUTE_A 0xC9C0`, usermode/doorbell `AMPERE_USERMODE_A 0xC561`.
 
-**Статус:** офлайн-framing зелёный (sizeof/offset + cmdq-фрейминг). **HW впереди:**
-подшаг A0 (`FIFO_GET_DEVICE_INFO_TABLE` → engineType/runlist), A1 (буферы во VRAM +
-GPFIFO в GPU-VA прямым GMMU), A2 (alloc+bind+schedule на железе = метрика прохода A).
+**Подпроход A0 🟢 HW 2026-07-14** — `nv_gsp_fifo_get_device_info`
+(`FIFO_GET_DEVICE_INFO_TABLE`, cmd `0x20801112`, params 3212б) на нашем subdevice:
+прочитаны **11 движков** RTX 4070S — GR0(0x01,runl0), SEC2(0x30), NVENC(0x26),
+NVDEC0(0x1d), **COPY0..COPY4(0x09..0x0d)**, OFA/NVJPEG(0x3d), SW(0x2c). **CE0
+найден: engineType=0x9, runlist=0** — снят вопрос угадывания engineType для A2.
+Доказательство: `docs/hw-dumps/20260714-rtx4070s-layer4-A0-devinfo-OK.log`.
+
+**Статус:** A0 🟢 HW; framing alloc/bind/schedule 🔧 офлайн. **HW впереди:**
+A1 (буферы instance/USERD/GPFIFO во VRAM + GPFIFO в GPU-VA прямым GMMU),
+A2 (alloc+bind+schedule на железе = метрика прохода A).
 
 ---
 

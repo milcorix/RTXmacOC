@@ -90,9 +90,12 @@
 | `nv_gsp_rm_channel_schedule` | `ctrla06fgpfifo.h` `NVA06F_CTRL_CMD_GPFIFO_SCHEDULE` | RM_CONTROL cmd=0xa06f0103, {bEnable,bSkipSubmit} | 🔧 офлайн |
 | `nv_gsp_rm_engine_obj_alloc` | `r535` (объект движка на канале) | GSP_RM_ALLOC hParent=канал, класс CE/GR | 🔧 офлайн |
 
-`engineType` (NV2080_ENGINE_TYPE_*) на HW берётся из `FIFO_GET_DEVICE_INFO_TABLE`
-(как `r535_fifo_runl_ctor`) — подшаг A0. HW-проходы: A (канал+bind+schedule),
-B (объект движка), C (pushbuffer+семафор).
+| `nv_gsp_fifo_get_device_info` | `r535_fifo_runl_ctor` + `ctrl2080fifo.h` `FIFO_GET_DEVICE_INFO_TABLE` | cmd=0x20801112, params 3212б; парс engineData[16] по ENGINE_INFO_TYPE (ENG_DESC=0/RM_ENGINE_TYPE=2/RUNLIST=3/PRI_BASE=11) | 🟢 HW 2026-07-14 (11 движков, CE0=0x9 runl0) |
+
+`engineType` (NV2080_ENGINE_TYPE_* == RM_ENGINE_TYPE) взят с железа через
+`FIFO_GET_DEVICE_INFO_TABLE` (A0 🟢, CE0=0x9). HW-проходы: A (канал+bind+schedule),
+B (объект движка), C (pushbuffer+семафор). Пруф A0:
+`docs/hw-dumps/20260714-rtx4070s-layer4-A0-devinfo-OK.log`.
 
 ## Конкретные upstream-ссылки (raw, ветка master ядра)
 

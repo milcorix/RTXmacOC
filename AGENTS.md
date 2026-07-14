@@ -163,8 +163,10 @@ docs/                   архитектура, роадмап, конспект
   (`nv_gsp_rm_channel_alloc`/`bind`/`schedule`/`engine_obj_alloc`), класс
   `AMPERE_CHANNEL_GPFIFO_A (0xC56F)`, params `NV_CHANNEL_ALLOC_PARAMS` (360б, compile-probe),
   контролы `NVA06F_CTRL_CMD_BIND/GPFIFO_SCHEDULE`. Порт nouveau `r535_chan_ramfc_write`.
-  Тех-запись: **`docs/gsp-layer4-fifo.md`**. Дальше HW: device-info (engineType) →
-  буферы во VRAM + GPFIFO в GPU-VA (прямой GMMU) → alloc+bind+schedule на железе.
+  Тех-запись: **`docs/gsp-layer4-fifo.md`**. **A0 🟢 HW 2026-07-14**: прочитана
+  таблица движков (11 шт.), CE0 engineType=0x9 runlist=0
+  (`docs/hw-dumps/20260714-rtx4070s-layer4-A0-devinfo-OK.log`). Дальше HW: A1 (буферы
+  во VRAM + GPFIFO в GPU-VA прямым GMMU) → A2 (alloc+bind+schedule).
 
 ## Ключевые источники (референс-база)
 

@@ -120,8 +120,13 @@ device-info — подшаг A0 (следующий за этим framing-сло
 - `tools/gsp_fifo_test.c` (`make gsp-fifo-test`): compile-probe sizeof/offset
   `NV_CHANNEL_ALLOC_PARAMS` (=360) + framing alloc/bind/schedule на синтетическом канале.
 
-**Дальше (HW):** A0 device-info (`FIFO_GET_DEVICE_INFO_TABLE`) → A1 буферы во VRAM +
-GPFIFO в VA (прямой GMMU) → A2 alloc+bind+schedule на железе (метрика прохода A).
+**A0 🟢 HW 2026-07-14** — `nv_gsp_fifo_get_device_info` прочитал таблицу движков
+RTX 4070S (11 шт.): GR0(0x01,runl0), SEC2(0x30), NVENC(0x26), NVDEC0(0x1d),
+**COPY0..COPY4(0x09..0x0d)**, OFA/NVJPEG(0x3d), SW(0x2c). CE0 → engineType=0x9,
+runlist=0. Пруф: `docs/hw-dumps/20260714-rtx4070s-layer4-A0-devinfo-OK.log`.
+
+**Дальше (HW):** A1 буферы instance/USERD/GPFIFO во VRAM + GPFIFO в GPU-VA (прямой
+GMMU) → A2 alloc+bind+schedule на железе (engineType=0x9, метрика прохода A).
 
 ---
 
