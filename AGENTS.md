@@ -166,10 +166,12 @@ docs/                   архитектура, роадмап, конспект
   `r535_chan_ramfc_write`. Тех-запись: **`docs/gsp-layer4-fifo.md`**. **A0**: таблица
   движков (11 шт.), CE0 engineType=0x9 runlist=0. **A1**: буферы instance/USERD/GPFIFO
   во VRAM (кольцо в GPU-VA прохода D). **A2**: `channel_alloc`+`BIND`+`GPFIFO_SCHEDULE`,
-  всё `NV_OK` — канал в runlist. Грабли: SCHEDULE-params ровно 2б (иначе
-  `NV_ERR_INVALID_PARAM_STRUCT 0x3a`). Пруф:
-  `docs/hw-dumps/20260714-rtx4070s-layer4-passA-chan-OK.log`. Дальше: B (объект движка
-  CE `AMPERE_DMA_COPY_B`), C (pushbuffer + семафор).
+  всё `NV_OK` — канал в runlist. **B**: `nv_gsp_rm_ce_obj_alloc` — объект
+  `AMPERE_DMA_COPY_B (0xC7B5)` на канале (`NVB0B5_ALLOCATION_PARAMETERS{version=1,
+  engineType=CE0}`) → `status=NV_OK`. Грабли A2: SCHEDULE-params ровно 2б (иначе
+  `NV_ERR_INVALID_PARAM_STRUCT 0x3a`). Пруфы:
+  `docs/hw-dumps/20260714-rtx4070s-layer4-pass{A-chan,B-ceobj}-OK.log`. Дальше: C
+  (pushbuffer с CE-методами + GPFIFO-запись + USERD GP_PUT + doorbell + семафор).
 
 ## Ключевые источники (референс-база)
 

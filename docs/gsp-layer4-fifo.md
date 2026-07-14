@@ -1,9 +1,11 @@
 # Слой 4 — command submission (каналы FIFO/GR) через GSP-RM
 
-**Статус:** 🟢 **ПРОХОД A НА ЖЕЛЕЗЕ 2026-07-14** (RTX 4070S, Linux/VFIO): A0 (таблица
-движков) + A1 (буферы во VRAM) + A2 (channel alloc + BIND + SCHEDULE) — всё `NV_OK`.
-Канал `AMPERE_CHANNEL_GPFIFO_A` (CE0) создан и запланирован в runlist.
-**Доказательство:** `docs/hw-dumps/20260714-rtx4070s-layer4-passA-chan-OK.log`.
+**Статус:** 🟢 **ПРОХОДЫ A+B НА ЖЕЛЕЗЕ 2026-07-14** (RTX 4070S, Linux/VFIO): A0 (таблица
+движков) + A1 (буферы во VRAM) + A2 (channel alloc + BIND + SCHEDULE) + **B (объект
+copy-engine `AMPERE_DMA_COPY_B` на канале)** — всё `NV_OK`. Канал `AMPERE_CHANNEL_GPFIFO_A`
+(CE0) создан, запланирован в runlist, на нём висит объект CE.
+**Доказательство:** `docs/hw-dumps/20260714-rtx4070s-layer4-passA-chan-OK.log` (A),
+`docs/hw-dumps/20260714-rtx4070s-layer4-passB-ceobj-OK.log` (B).
 Эталон — nouveau `nvkm/engine/fifo/r535.c` (`r535_chan_ramfc_write`), классы из
 `nvif/class.h`, структуры из nvrm 535.113.01 (`alloc/alloc_channel.h`, `ctrl/ctrla06f/*`).
 
@@ -144,9 +146,15 @@ device-info — подшаг A0 (следующий за этим framing-сло
 — слали `paramsSize=4` вместо ровно 2 (`{NvBool bEnable; NvBool bSkipSubmit}`). RM сверяет
 точный размер структуры контрола → фикс на 2 → `NV_OK`.
 
-**Дальше (проход B/C):** B — объект движка CE `AMPERE_DMA_COPY_B (0xC7B5)` на канале
-(`nv_gsp_rm_engine_obj_alloc`); C — pushbuffer (CE копия/семафор) + GPFIFO-запись +
-USERD GP_PUT + doorbell (`AMPERE_USERMODE_A 0xC561`) + поллинг семафора во VRAM.
+**Проход B 🟢 HW 2026-07-14** — `nv_gsp_rm_ce_obj_alloc`: `GSP_RM_ALLOC` класс
+`AMPERE_DMA_COPY_B (0xC7B5)` на канале (hParent=канал, hObject=`0xce00`),
+`NVB0B5_ALLOCATION_PARAMETERS{version=1, engineType=CE0}` → `status=NV_OK`. Сверено с
+OGK `clb0b5sw.h`. Пруф: `docs/hw-dumps/20260714-rtx4070s-layer4-passB-ceobj-OK.log`.
+
+**Дальше (проход C — исполнение команды):** pushbuffer с методами CE (копия или
+`SEMAPHORE_*`/`SEMAPHORE_RELEASE`) во VRAM (в замапленном GPU-VA), GPFIFO-запись
+(адрес+длина pushbuffer), USERD GP_PUT, doorbell (`AMPERE_USERMODE_A 0xC561` — регистр
+VFN), поллинг семафора во VRAM. Это первая реально исполненная команда GPU.
 
 ---
 
