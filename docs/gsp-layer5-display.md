@@ -82,7 +82,8 @@ DP 0x200→SOR1). Всё `NV_OK`. Пруфы:
     SET_POINT_IN/SET_SIZE_IN/OUT/UPDATE) + IMM `NVC77B`.
 
   **Оставшиеся шаги 5C.4** (по одному метрика-HW-прогону, для HDMI-монитора SOR0, без
-  DP link training): (a) window channel `NVC77E` + IMM alloc; (b) framebuffer во VRAM
+  DP link training): (a 🔧 framing) window channel `GA102_DISP_WINDOW_CHANNEL_DMA (0xC67E)`
+  alloc (тем же путём, что core; handle 0xc67e0000) [+ IMM `0xC67B`]; (b) framebuffer во VRAM
   (наш GMMU) + заливка тест-паттерна (CE-копия слоя 4); (c) core methods (raster/OR/
   control из EDID-таймингов) + `UPDATE`; (d) window methods (surface) + `UPDATE` →
   **картинка**. Тайминги — из EDID (прочитан в 5B). Для DP-монитора дополнительно

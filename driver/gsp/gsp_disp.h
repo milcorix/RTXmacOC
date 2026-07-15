@@ -41,7 +41,11 @@
 #define AD102_DISP_CORE_CHANNEL_DMA  0x0000c77du  /* core channel (Ada) */
 #define GA102_DISP_WINDOW_CHANNEL_DMA 0x0000c67eu /* window channel (Ada reuse GA102) */
 #define GA102_DISP_CURSOR            0x0000c67au  /* cursor (Ada reuse GA102) */
+#define GA102_DISP_WINDOW_IMM_CHANNEL_DMA 0x0000c67bu /* window IMM (Ada reuse GA102) */
 #define NV_GSP_RM_DISPCORE_HANDLE    0xc77d0000u  /* AD102_DISP_CORE_CHANNEL_DMA<<16 | head0 */
+#define NV_GSP_RM_DISPWIN_HANDLE     0xc67e0000u  /* GA102_DISP_WINDOW_CHANNEL_DMA<<16 | win0 */
+/* nv_gsp_disp_core_channel_alloc/_channel_pushbuffer — generic (годятся и для window
+   channel GA102_DISP_WINDOW_CHANNEL_DMA: тот же r535_dmac_init путь). */
 
 /* NV2080_CTRL_CMD_INTERNAL_DISPLAY_CHANNEL_PUSHBUFFER (ctrl2080internal.h, на внутр.
    subdevice GSP). params (40б): addressSpace@0 physicalAddr@8(u64) limit@16(u64)

@@ -873,6 +873,25 @@ static int run(const nv_mmio_t *io, struct arena *ar, const char *bdf)
                                        did, arc, ast, (int)sor,
                                        (arc==NV_GSP_RM_OK && ast==0 && sor!=~0u) ? "  ★ SOR ★" : "  (не OK)");
                             }
+
+                            /* --- СЛОЙ 5 C.4a: window channel (GA102_DISP_WINDOW_CHANNEL_DMA) ---
+                               Тем же путём, что core (r535_dmac_init): пушбуфер + PUSHBUFFER
+                               control + alloc под display root. Нужен для surface/scanout. */
+                            uint64_t win_pb = 0x13412000ull;   /* пушбуфер window-channel */
+                            nv_pramin_fill(io, &win, win_pb, NV_DISP_PB_SIZE, 0u);
+                            uint32_t wpst = 0xffffffffu;
+                            int wprc = nv_gsp_disp_channel_pushbuffer(&ch, si.h_client, si.h_subdevice,
+                                                                      GA102_DISP_WINDOW_CHANNEL_DMA, 0,
+                                                                      win_pb, NV_DISP_PB_SIZE - 1, &wpst);
+                            printf("СЛОЙ 5 C.4a: WINDOW PUSHBUFFER rc=%d status=0x%x pb=0x%llx\n",
+                                   wprc, wpst, (unsigned long long)win_pb);
+                            uint32_t hwin = 0, wst = 0xffffffffu;
+                            int wrc = nv_gsp_disp_core_channel_alloc(&ch, hcli, hroot,
+                                                                     GA102_DISP_WINDOW_CHANNEL_DMA, 0,
+                                                                     &hwin, &wst);
+                            printf("СЛОЙ 5 C.4a: WINDOW_CHANNEL_DMA rc=%d status=0x%x handle=0x%08x%s\n",
+                                   wrc, wst, hwin,
+                                   (wrc==NV_GSP_RM_OK && wst==0) ? "  ★ WINDOW CHANNEL ★" : "  (не OK)");
                         }
                     }
                 }
