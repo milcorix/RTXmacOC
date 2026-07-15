@@ -135,6 +135,18 @@
   Примечание: монитор 1280x1024 (не 1920x1080) — для 5C.4e FB+window строить под нативное
   разрешение из EDID. Пиксели → 5C.4e (window surface + ctx-dma/RAMHT).
 
+  **5C.4e (оркестратор, готов к HW-прогону):** window surface + ctx-dma/RAMHT = пиксели.
+  В `tools/gsp_boot_linux.c` (после успешного 5C.4d): (1) FB под нативное разрешение из
+  EDID (mt.hact×mt.vact, R/G/B полосы); (2) ctx-dma `NV_DMA_IN_MEMORY` (весь VRAM, RDWR) —
+  24б дескриптор (flags0=0x45) в inst-mem дисплея @`disp_inst+0x1000` через PRAMIN; (3)
+  RAMHT-запись {handle=VRAM, context=chid<<25|inst_off<<9} для window-канала (chid=1),
+  т.к. `hcli=0xc1d00000`→`client&0x3fff=0` (без перекрытия битов), с read-back; (4) поток
+  window `build_window_image`+`build_window_update`(без интерлока — core уже применён) →
+  win-пушбуфер (0x13412000) через PRAMIN; (5) бамп window PUT (`BAR0+0x690000`) → poll
+  GET==PUT. Метрика 🟢: window GET==PUT + **ПИКСЕЛИ на мониторе** (R/G/B полосы). **Открытый
+  риск:** семантика `inst_offset` в RAMHT-context (node->offset — байт-offset относительно
+  disp_inst) — проверяется на железе; при промахе ctx-dma не резолвится → диагностика в логе.
+
   **5C.4d (оркестратор):** сабмит core-channel modeset БЕЗ surface/
   ctx-dma (де-риск: сначала проверяем сам механизм сабмита + программу таймингов). В
   `tools/gsp_boot_linux.c`: парсим EDID выбранного TMDS-выхода → строим поток
