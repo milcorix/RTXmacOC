@@ -478,7 +478,7 @@ static int run(const nv_mmio_t *io, struct arena *ar, const char *bdf)
     int l3_static_ok = 0, l3_chain_ok = 0, l3_ctrl_ok = 0, l3_vaspace_ok = 0;
     int l3_vram_ok = 0, l3_map_ok = 0;
     int l4_devinfo_ok = 0, l4_ce_engtype = -1, l4_chan_ok = 0, l4_bind_ok = 0, l4_sched_ok = 0;
-    int l5_disp_ok = 0;
+    int l5_disp_ok = 0, l5_modeset_ok = 0;
     int l4_ce_obj_ok = 0, l4_exec_ok = 0; uint32_t l4_ce_runlist = 0;
     if (got) {
         nv_gsp_rpc_chan ch;
@@ -795,6 +795,9 @@ static int run(const nv_mmio_t *io, struct arena *ar, const char *bdf)
                     uint32_t conn = 0, cst = 0xffffffffu;
                     nv_gsp_disp_get_connect_state(&ch, hcli, hdisp, dmask, &conn, &cst);
                     printf("СЛОЙ 5 B: CONNECT_STATE status=0x%x connected=0x%x\n", cst, conn);
+                    /* Захват для modeset (5C.4d): предпочитаем TMDS/HDMI (без DP link training). */
+                    static uint8_t md_edid[256]; int md_edid_ok = 0;
+                    uint32_t md_did = 0, md_proto = 0, md_sor = ~0u;
                     for (uint32_t b = 0; b < 32; b++) {
                         uint32_t did = dmask & (1u << b);
                         if (!did) continue;
@@ -819,6 +822,15 @@ static int run(const nv_mmio_t *io, struct arena *ar, const char *bdf)
                                 printf(" magic=%02x%02x%02x%02x%02x%02x%02x%02x",
                                        edid[0],edid[1],edid[2],edid[3],edid[4],edid[5],edid[6],edid[7]);
                             printf("\n");
+                            /* Кандидат на modeset: первый TMDS-выход (или первый вообще, если TMDS нет). */
+                            int is_tmds = (pr==NV0073_OR_PROTOCOL_SOR_SINGLE_TMDS_A ||
+                                           pr==NV0073_OR_PROTOCOL_SOR_SINGLE_TMDS_B ||
+                                           pr==NV0073_OR_PROTOCOL_SOR_DUAL_TMDS);
+                            if (erc==NV_GSP_RM_OK && est==0 && esz>=128 &&
+                                (!md_edid_ok || (is_tmds && md_proto>=8 /*был DP*/))) {
+                                memcpy(md_edid, edid, sizeof(md_edid));
+                                md_edid_ok = 1; md_did = did; md_proto = pr;
+                            }
                         }
                     }
 
@@ -872,6 +884,8 @@ static int run(const nv_mmio_t *io, struct arena *ar, const char *bdf)
                                 printf("СЛОЙ 5 C.3: ASSIGN_SOR disp=0x%04x rc=%d status=0x%x SOR=%d%s\n",
                                        did, arc, ast, (int)sor,
                                        (arc==NV_GSP_RM_OK && ast==0 && sor!=~0u) ? "  ★ SOR ★" : "  (не OK)");
+                                if (did == md_did && arc==NV_GSP_RM_OK && ast==0 && sor!=~0u)
+                                    md_sor = sor;   /* SOR для нашего modeset-выхода */
                             }
 
                             /* --- СЛОЙ 5 C.4a: window channel (GA102_DISP_WINDOW_CHANNEL_DMA) ---
@@ -917,6 +931,52 @@ static int run(const nv_mmio_t *io, struct arena *ar, const char *bdf)
                                        (unsigned long long)fb_phys, fb_w, fb_h, pitch,
                                        (unsigned long long)fb_size, p0, p1, p2,
                                        fb_ok ? "  ★ ПАТТЕРН В VRAM ★" : "  (mismatch)");
+                            }
+
+                            /* --- СЛОЙ 5 C.4d: сабмит core-channel modeset (raster+pclk+SOR) ---
+                               Программируем тайминг дисплея и SOR через core-channel: пишем
+                               поток методов в пушбуфер (PRAMIN) → бампаем PUT в user-регионе
+                               BAR0 → ждём GET==PUT. БЕЗ surface/ctx-dma (notifier выкл,
+                               interlock окон=0) — проверяем сам механизм сабмита + программу
+                               таймингов. Пиксели (window+ctx-dma) — 5C.4e. Порт corec37d_*+
+                               headc37d_mode. PUT/GET: NV507C @user+0x0/+0x4, PTR[11:2]=байт-offset. */
+                            if (wrc==NV_GSP_RM_OK && wst==0 && md_edid_ok && md_sor != ~0u) {
+                                nv_edid_timing mt;
+                                int mprc = nv_edid_parse_dtd(md_edid, sizeof(md_edid), &mt);
+                                printf("СЛОЙ 5 C.4d: EDID DTD parse rc=%d %ux%u@%uкГц sync h%s v%s did=0x%04x proto=%u SOR=%d\n",
+                                       mprc, mt.hact, mt.vact, mt.pclk_khz,
+                                       mt.hsync_pos?"+":"-", mt.vsync_pos?"+":"-",
+                                       md_did, md_proto, (int)md_sor);
+                                if (mprc == 0) {
+                                    uint32_t head = 0;
+                                    /* Собрать поток core: init(notifier=0) + modeset + update(interlock=0). */
+                                    static uint8_t cs[1024]; uint32_t coff = 0;
+                                    nv_gsp_disp_build_core_init(cs, &coff, 0u /*notifier disabled*/);
+                                    nv_gsp_disp_build_core_modeset(cs, &coff, &mt, head, md_sor, md_proto);
+                                    nv_gsp_disp_build_core_update(cs, &coff, 0u /*без интерлока окон*/);
+                                    /* Записать поток в core-пушбуфер (LE dwords) через PRAMIN. */
+                                    for (uint32_t i = 0; i < coff; i += 4)
+                                        nv_pramin_wr32(io, &win, core_pb + i,
+                                                       (uint32_t)cs[i] | ((uint32_t)cs[i+1]<<8) |
+                                                       ((uint32_t)cs[i+2]<<16) | ((uint32_t)cs[i+3]<<24));
+                                    /* Бампнуть PUT (байтовый offset потока) в user-регионе core. */
+                                    uint32_t core_user = NVC77D_CORE_USER_BASE;   /* BAR0+0x680000 */
+                                    uint32_t get0 = io->rd(io->ctx, core_user + 0x4);
+                                    io->wr(io->ctx, core_user + 0x0, coff);       /* PUT = coff (PTR[11:2]) */
+                                    /* Ждать GET==PUT (до ~500мс). */
+                                    uint32_t get = get0; int done = 0;
+                                    for (int it = 0; it < 500; it++) {
+                                        get = io->rd(io->ctx, core_user + 0x4);
+                                        if ((get & 0xffcu) == (coff & 0xffcu)) { done = 1; break; }
+                                        bar_udelay(NULL, 1000);
+                                    }
+                                    printf("СЛОЙ 5 C.4d: core modeset поток=%u байт (%u методов) PUT=0x%x GET0=0x%x GET=0x%x %s\n",
+                                           coff, coff/8u, coff, get0, get,
+                                           done ? "  ★ CORE MODESET САБМИТ (GET==PUT) ★" : "  (GET!=PUT — не проглотил)");
+                                    /* Дать монитору просинхронизироваться (видно на HDMI). */
+                                    bar_udelay(NULL, 4000000);
+                                    l5_modeset_ok = done;
+                                }
                             }
                         }
                     }
@@ -974,6 +1034,8 @@ static int run(const nv_mmio_t *io, struct arena *ar, const char *bdf)
                    (l4_ce_engtype >= 0) ? ", CE0 найден" : "");
         if (l5_disp_ok)
             printf("*** СЛОЙ 5 (A0): дисплейный движок перечислен — NV04_DISPLAY_COMMON + heads + displayMask ***\n");
+        if (l5_modeset_ok)
+            printf("*** СЛОЙ 5 (C.4d): core-channel modeset САБМИТ проглочен (GET==PUT) — тайминг+SOR запрограммированы ***\n");
         if (l4_ce_obj_ok)
             printf("*** СЛОЙ 4 (проход B): объект copy-engine (AMPERE_DMA_COPY_B) на канале — OK ***\n");
         if (l4_exec_ok)

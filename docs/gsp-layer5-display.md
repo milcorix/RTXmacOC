@@ -122,6 +122,16 @@
   **Открытый риск:** точная семантика `inst_offset` в context RAMHT (nvkm node->offset) и
   chid.user — проверяются на железе.
 
+  **5C.4d (оркестратор, готов к HW-прогону):** сабмит core-channel modeset БЕЗ surface/
+  ctx-dma (де-риск: сначала проверяем сам механизм сабмита + программу таймингов). В
+  `tools/gsp_boot_linux.c`: парсим EDID выбранного TMDS-выхода → строим поток
+  `build_core_init(notifier=0)` + `build_core_modeset` + `build_core_update(interlock=0)`
+  → пишем в core-пушбуфер (0x13410000) через PRAMIN → бампаем PUT (`BAR0+0x680000+0x0`,
+  PTR[11:2]=байт-offset) → ждём GET==PUT (`+0x4`). Метрика 🟡: GET==PUT (GSP/дисплей
+  проглотил поток) + монитор синхронизируется (тайминг+SOR запрограммированы; пикселей
+  пока нет — они в 5C.4e через window+ctx-dma). PUT/GET-смещения — nvhw `cl507c.h`
+  (NV507C_PUT=0x0, GET=0x4, PTR[11:2]).
+
 ---
 
 ## 1. Классы и хэндлы (nvif/class.h, r535.c, сверено)
