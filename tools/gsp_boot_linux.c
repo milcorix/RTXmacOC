@@ -949,95 +949,84 @@ static int run(const nv_mmio_t *io, struct arena *ar, const char *bdf)
                                        md_did, md_proto, (int)md_sor);
                                 if (mprc == 0) {
                                     uint32_t head = 0;
-                                    /* Собрать поток core: init(notifier=0) + modeset + update(interlock=0). */
+                                    uint32_t wnd = 0;                 /* window-инстанс (owner head0) */
+                                    uint32_t wnd_bit = 1u << wnd;     /* бит окна в SET_WINDOW_INTERLOCK_FLAGS */
+                                    uint64_t fb2 = 0x14000000ull;
+                                    uint32_t w = mt.hact, h = mt.vact, pit = w * 4u;
+
+                                    /* 1) FB под нативное разрешение (из EDID) — R/G/B полосы (X8R8G8B8). */
+                                    uint64_t fbsz = (uint64_t)pit * h;
+                                    uint32_t bnd = h / 3u; uint64_t bb = (uint64_t)pit * bnd;
+                                    nv_pramin_fill(io, &win, fb2 + 0*bb, (uint32_t)bb, 0x00ff0000u);
+                                    nv_pramin_fill(io, &win, fb2 + 1*bb, (uint32_t)bb, 0x0000ff00u);
+                                    nv_pramin_fill(io, &win, fb2 + 2*bb, (uint32_t)(fbsz - 2*bb), 0x000000ffu);
+
+                                    /* 2) ctx-dma NV_DMA_IN_MEMORY (весь VRAM, RDWR) — 24б дескриптор в
+                                       inst-mem дисплея @disp_inst+0x1000 (после RAMHT). */
+                                    uint32_t desc_off = 0x1000u;
+                                    uint64_t desc_phys = disp_inst + desc_off;
+                                    uint8_t desc[NV_CTXDMA_DESC_SIZE];
+                                    nv_gsp_disp_build_ctxdma_desc(desc, 0, 0x2ffffffffull);
+                                    for (unsigned i = 0; i < NV_CTXDMA_DESC_SIZE; i += 4)
+                                        nv_pramin_wr32(io, &win, desc_phys + i,
+                                                       (uint32_t)desc[i] | ((uint32_t)desc[i+1]<<8) |
+                                                       ((uint32_t)desc[i+2]<<16) | ((uint32_t)desc[i+3]<<24));
+                                    /* 3) RAMHT-запись {handle,context} для window-канала (chid=window0). */
+                                    uint32_t rslot = 0, rctx = 0;
+                                    nv_gsp_disp_ramht_entry(NV_DISP_CHID_WINDOW(head), NV_DISP_HANDLE_VRAM,
+                                                            hcli, desc_off, &rslot, &rctx);
+                                    uint64_t ent_phys = disp_inst + (uint64_t)rslot * NV_DISP_RAMHT_ENTRY;
+                                    nv_pramin_wr32(io, &win, ent_phys + 0, NV_DISP_HANDLE_VRAM);
+                                    nv_pramin_wr32(io, &win, ent_phys + 4, rctx);
+                                    printf("СЛОЙ 5 C.4e: ctx-dma desc@0x%llx flags0=0x%x; RAMHT slot=%u ent@0x%llx ctx=0x%x (rb h=0x%x c=0x%x)\n",
+                                           (unsigned long long)desc_phys,
+                                           (uint32_t)desc[0]|((uint32_t)desc[1]<<8)|((uint32_t)desc[2]<<16)|((uint32_t)desc[3]<<24),
+                                           rslot, (unsigned long long)ent_phys, rctx,
+                                           nv_pramin_rd32(io,&win,ent_phys+0), nv_pramin_rd32(io,&win,ent_phys+4));
+
+                                    /* 4) Поток core: init(notifier=0) + modeset + update(INTERLOCK окно0).
+                                          Поток window: image + update(INTERLOCK core). Атомарный modeset+flip
+                                          — core UPDATE ждёт window0, window UPDATE ждёт core (как nouveau). */
                                     static uint8_t cs[1024]; uint32_t coff = 0;
                                     nv_gsp_disp_build_core_init(cs, &coff, 0u /*notifier disabled*/);
                                     nv_gsp_disp_build_core_modeset(cs, &coff, &mt, head, md_sor, md_proto);
-                                    nv_gsp_disp_build_core_update(cs, &coff, 0u /*без интерлока окон*/);
-                                    /* Записать поток в core-пушбуфер (LE dwords) через PRAMIN. */
+                                    nv_gsp_disp_build_core_update(cs, &coff, wnd_bit /*интерлок с окном0*/);
                                     for (uint32_t i = 0; i < coff; i += 4)
                                         nv_pramin_wr32(io, &win, core_pb + i,
                                                        (uint32_t)cs[i] | ((uint32_t)cs[i+1]<<8) |
                                                        ((uint32_t)cs[i+2]<<16) | ((uint32_t)cs[i+3]<<24));
-                                    /* Бампнуть PUT (байтовый offset потока) в user-регионе core. */
-                                    uint32_t core_user = NVC77D_CORE_USER_BASE;   /* BAR0+0x680000 */
-                                    uint32_t get0 = io->rd(io->ctx, core_user + 0x4);
-                                    io->wr(io->ctx, core_user + 0x0, coff);       /* PUT = coff (PTR[11:2]) */
-                                    /* Ждать GET==PUT (до ~500мс). */
-                                    uint32_t get = get0; int done = 0;
-                                    for (int it = 0; it < 500; it++) {
-                                        get = io->rd(io->ctx, core_user + 0x4);
-                                        if ((get & 0xffcu) == (coff & 0xffcu)) { done = 1; break; }
+                                    static uint8_t ws[256]; uint32_t woff = 0;
+                                    nv_gsp_disp_build_window_image(ws, &woff, NVC37E_PARAMS_FORMAT_X8R8G8B8,
+                                                                   w, h, pit, fb2, NV_DISP_HANDLE_VRAM);
+                                    nv_gsp_disp_build_window_update(ws, &woff, 1 /*интерлок с core*/);
+                                    for (uint32_t i = 0; i < woff; i += 4)
+                                        nv_pramin_wr32(io, &win, win_pb + i,
+                                                       (uint32_t)ws[i] | ((uint32_t)ws[i+1]<<8) |
+                                                       ((uint32_t)ws[i+2]<<16) | ((uint32_t)ws[i+3]<<24));
+
+                                    /* 5) Бампнуть window PUT (встанет на UPDATE, ждёт core), затем core PUT
+                                          (защёлкнутся вместе). PUT/GET: user+0x0/+0x4, PTR[11:2]=байт-offset. */
+                                    uint32_t core_user = NVC77D_CORE_USER_BASE;                 /* 0x680000 */
+                                    uint32_t win_user  = NVC37E_WINDOW_USER_BASE + head*0x1000u;/* 0x690000 */
+                                    io->wr(io->ctx, win_user  + 0x0, woff);
+                                    io->wr(io->ctx, core_user + 0x0, coff);
+                                    uint32_t cget = 0, wget = 0; int cdone = 0, wdone = 0;
+                                    for (int it = 0; it < 1000; it++) {
+                                        cget = io->rd(io->ctx, core_user + 0x4);
+                                        wget = io->rd(io->ctx, win_user  + 0x4);
+                                        cdone = ((cget & 0xffcu) == (coff & 0xffcu));
+                                        wdone = ((wget & 0xffcu) == (woff & 0xffcu));
+                                        if (cdone && wdone) break;
                                         bar_udelay(NULL, 1000);
                                     }
-                                    printf("СЛОЙ 5 C.4d: core modeset поток=%u байт (%u методов) PUT=0x%x GET0=0x%x GET=0x%x %s\n",
-                                           coff, coff/8u, coff, get0, get,
-                                           done ? "  ★ CORE MODESET САБМИТ (GET==PUT) ★" : "  (GET!=PUT — не проглотил)");
-                                    l5_modeset_ok = done;
-
-                                    /* --- СЛОЙ 5 C.4e: window surface (пиксели) через ctx-dma/RAMHT ---
-                                       1) FB под нативное разрешение (из EDID) — R/G/B полосы;
-                                       2) ctx-dma NV_DMA_IN_MEMORY (весь VRAM, RDWR) — дескриптор
-                                          в inst-mem дисплея после RAMHT (offset 0x1000);
-                                       3) RAMHT-запись {handle,context} для window-канала (chid=1);
-                                       4) поток window (image+update) → win-пушбуфер (PRAMIN);
-                                       5) бамп window PUT (BAR0+0x690000) → poll GET==PUT.
-                                       hcli=0xc1d00000 → client&0x3fff=0 → context=chid<<25|inst<<9.
-                                       Порт wndwc37e_image_set + r535_dmac_bind + gv100_dmaobj. */
-                                    if (done) {
-                                        uint64_t fb2 = 0x14000000ull;
-                                        uint32_t w = mt.hact, h = mt.vact, pit = w * 4u;
-                                        uint64_t fbsz = (uint64_t)pit * h;
-                                        uint32_t bnd = h / 3u; uint64_t bb = (uint64_t)pit * bnd;
-                                        nv_pramin_fill(io, &win, fb2 + 0*bb, (uint32_t)bb, 0x00ff0000u);
-                                        nv_pramin_fill(io, &win, fb2 + 1*bb, (uint32_t)bb, 0x0000ff00u);
-                                        nv_pramin_fill(io, &win, fb2 + 2*bb, (uint32_t)(fbsz - 2*bb), 0x000000ffu);
-                                        /* 2) ctx-dma дескриптор (весь VRAM 0..12ГиБ-1) в disp_inst+0x1000. */
-                                        uint32_t desc_off = 0x1000u;
-                                        uint64_t desc_phys = disp_inst + desc_off;
-                                        uint8_t desc[NV_CTXDMA_DESC_SIZE];
-                                        nv_gsp_disp_build_ctxdma_desc(desc, 0, 0x2ffffffffull);
-                                        for (unsigned i = 0; i < NV_CTXDMA_DESC_SIZE; i += 4)
-                                            nv_pramin_wr32(io, &win, desc_phys + i,
-                                                           (uint32_t)desc[i] | ((uint32_t)desc[i+1]<<8) |
-                                                           ((uint32_t)desc[i+2]<<16) | ((uint32_t)desc[i+3]<<24));
-                                        /* 3) RAMHT-запись для window-канала (chid=window0). */
-                                        uint32_t rslot = 0, rctx = 0;
-                                        nv_gsp_disp_ramht_entry(NV_DISP_CHID_WINDOW(head), NV_DISP_HANDLE_VRAM,
-                                                                hcli, desc_off, &rslot, &rctx);
-                                        uint64_t ent_phys = disp_inst + (uint64_t)rslot * NV_DISP_RAMHT_ENTRY;
-                                        nv_pramin_wr32(io, &win, ent_phys + 0, NV_DISP_HANDLE_VRAM);
-                                        nv_pramin_wr32(io, &win, ent_phys + 4, rctx);
-                                        uint32_t rb_h = nv_pramin_rd32(io, &win, ent_phys + 0);
-                                        uint32_t rb_c = nv_pramin_rd32(io, &win, ent_phys + 4);
-                                        printf("СЛОЙ 5 C.4e: ctx-dma desc@0x%llx flags0=0x%x; RAMHT slot=%u ent@0x%llx handle=0x%x ctx=0x%x (readback h=0x%x c=0x%x)\n",
-                                               (unsigned long long)desc_phys,
-                                               (uint32_t)desc[0]|((uint32_t)desc[1]<<8)|((uint32_t)desc[2]<<16)|((uint32_t)desc[3]<<24),
-                                               rslot, (unsigned long long)ent_phys, NV_DISP_HANDLE_VRAM, rctx, rb_h, rb_c);
-                                        /* 4) поток window: image + update (без интерлока — core уже применён). */
-                                        static uint8_t ws[256]; uint32_t woff = 0;
-                                        nv_gsp_disp_build_window_image(ws, &woff, NVC37E_PARAMS_FORMAT_X8R8G8B8,
-                                                                       w, h, pit, fb2, NV_DISP_HANDLE_VRAM);
-                                        nv_gsp_disp_build_window_update(ws, &woff, 0 /*без интерлока core*/);
-                                        for (uint32_t i = 0; i < woff; i += 4)
-                                            nv_pramin_wr32(io, &win, win_pb + i,
-                                                           (uint32_t)ws[i] | ((uint32_t)ws[i+1]<<8) |
-                                                           ((uint32_t)ws[i+2]<<16) | ((uint32_t)ws[i+3]<<24));
-                                        /* 5) бамп window PUT (user-регион 0x690000 + head*0x1000). */
-                                        uint32_t win_user = NVC37E_WINDOW_USER_BASE + head * 0x1000u;
-                                        uint32_t wget0 = io->rd(io->ctx, win_user + 0x4);
-                                        io->wr(io->ctx, win_user + 0x0, woff);
-                                        uint32_t wget = wget0; int wdone = 0;
-                                        for (int it = 0; it < 500; it++) {
-                                            wget = io->rd(io->ctx, win_user + 0x4);
-                                            if ((wget & 0xffcu) == (woff & 0xffcu)) { wdone = 1; break; }
-                                            bar_udelay(NULL, 1000);
-                                        }
-                                        printf("СЛОЙ 5 C.4e: window %ux%u pitch=%u FB=0x%llx поток=%u байт (%u методов) PUT=0x%x GET0=0x%x GET=0x%x %s\n",
-                                               w, h, pit, (unsigned long long)fb2, woff, woff/8u, woff, wget0, wget,
-                                               wdone ? "  ★ WINDOW FLIP САБМИТ (GET==PUT) — ПИКСЕЛИ ★" : "  (GET!=PUT)");
-                                        l5_scanout_ok = wdone;
-                                    }
+                                    printf("СЛОЙ 5 C.4d: core поток=%u байт (%u мет) PUT=0x%x GET=0x%x %s\n",
+                                           coff, coff/8u, coff, cget, cdone ? "GET==PUT" : "GET!=PUT");
+                                    printf("СЛОЙ 5 C.4e: window %ux%u pit=%u FB=0x%llx поток=%u байт (%u мет) PUT=0x%x GET=0x%x %s\n",
+                                           w, h, pit, (unsigned long long)fb2, woff, woff/8u, woff, wget,
+                                           (cdone && wdone) ? "  ★ INTERLOCKED MODESET+FLIP (GET==PUT) — ПИКСЕЛИ ★"
+                                                            : "  (GET!=PUT — см. диагностику ниже)");
+                                    l5_modeset_ok = cdone;
+                                    l5_scanout_ok = (cdone && wdone);
 
                                     /* Дать монитору просинхронизироваться + показать кадр (видно на HDMI). */
                                     bar_udelay(NULL, 5000000);

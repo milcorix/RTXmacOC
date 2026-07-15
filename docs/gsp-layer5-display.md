@@ -135,7 +135,18 @@
   Примечание: монитор 1280x1024 (не 1920x1080) — для 5C.4e FB+window строить под нативное
   разрешение из EDID. Пиксели → 5C.4e (window surface + ctx-dma/RAMHT).
 
-  **5C.4e (оркестратор, готов к HW-прогону):** window surface + ctx-dma/RAMHT = пиксели.
+  **5C.4e HW-прогон #1 (2026-07-16): ctx-dma/RAMHT записаны верно (readback совпал), но
+  window GET встал на UPDATE (12/13 методов).** Диагноз: первичная активация окна должна
+  быть АТОМАРНО сцеплена (interlocked) с core UPDATE — я ошибочно подал раздельные UPDATE.
+  Исправлено: core UPDATE интерлочится с окном0 (`SET_WINDOW_INTERLOCK_FLAGS=1`), window
+  UPDATE — с core (`SET_INTERLOCK_FLAGS=WITH_CORE`), оба PUT бампаются → защёлкиваются
+  вместе (как nouveau на первом modeset). Пруф #1:
+  `docs/hw-dumps/20260716-rtx4070s-layer5-C4e-interlock-stall.log`.
+  Заметка: пока поднимаем ОДИН выход (TMDS 0x100→SOR0, head0). Второй монитор (DP 0x200→
+  SOR1) — отдельный шаг (head1 + DP link training `DP_CTRL`); разрешение каждого берётся
+  из его EDID (авто).
+
+  **5C.4e (оркестратор, готов к HW-прогону):** атомарный interlocked modeset+flip = пиксели.
   В `tools/gsp_boot_linux.c` (после успешного 5C.4d): (1) FB под нативное разрешение из
   EDID (mt.hact×mt.vact, R/G/B полосы); (2) ctx-dma `NV_DMA_IN_MEMORY` (весь VRAM, RDWR) —
   24б дескриптор (flags0=0x45) в inst-mem дисплея @`disp_inst+0x1000` через PRAMIN; (3)
