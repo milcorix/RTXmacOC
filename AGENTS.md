@@ -206,7 +206,9 @@ docs/                   архитектура, роадмап, конспект
   `docs/hw-dumps/20260715-rtx4070s-layer5-C4a-winchan-OK.log`. Классы каналов Ada (из
   nouveau `ad102_disp`): core 0xC77D, window 0xC67E, IMM 0xC67B, cursor 0xC67A. Энкодер
   DMA-методов дисплея — `nv_gsp_disp_push_method`. Тех-запись: **`docs/gsp-layer5-display.md`**.
-  Аппаратный modeset-трек (Linux/VFIO). Дальше: 5C.4b-d (framebuffer во VRAM + методы
+  Аппаратный modeset-трек (Linux/VFIO). **5C.4b 🟢 HW**: framebuffer 1920x1080 BGRA во
+  VRAM (0x14000000) залит R/G/B через PRAMIN, read-back совпал (пруф
+  `docs/hw-dumps/20260715-rtx4070s-layer5-C4b-fb-OK.log`). Дальше: 5C.4c-d (методы
   core/window channel SetRaster/SetContextDmaIso/SetSurface/Update = **картинка**;
   метрика — визуально на мониторе). Интеграция в macOS WindowServer — ОТДЕЛЬНЫЙ трек,
   замок Apple (гейт R10).

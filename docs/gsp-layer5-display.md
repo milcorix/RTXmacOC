@@ -1,6 +1,7 @@
 # Слой 5 — дисплей / modeset через GSP-RM
 
-**Статус:** 🟢 **5A+5B+5C.1..5C.4a НА ЖЕЛЕЗЕ 2026-07-14..15** (RTX 4070S, Linux/VFIO).
+**Статус:** 🟢 **5A+5B+5C.1..5C.4b НА ЖЕЛЕЗЕ 2026-07-14..15** (RTX 4070S, Linux/VFIO).
+5C.4b: framebuffer 1920x1080 во VRAM (0x14000000) залит R/G/B, read-back совпал.
 5C.1: RAMIN + display root `AD102_DISP` (0xc7700000). 5C.2: core channel
 `AD102_DISP_CORE_CHANNEL_DMA` (0xc77d0000). 5C.3: SOR acquire (HDMI→SOR0, DP→SOR1).
 5C.4a: window channel `GA102_DISP_WINDOW_CHANNEL_DMA` (0xc67e0000). Всё `NV_OK` — вся
@@ -87,9 +88,10 @@
   DP link training): (a ✅ 🟢 HW 2026-07-15) window channel `GA102_DISP_WINDOW_CHANNEL_DMA
   (0xC67E)` alloc (handle 0xc67e0000, `NV_OK`; пруф
   `docs/hw-dumps/20260715-rtx4070s-layer5-C4a-winchan-OK.log`) [+ IMM `0xC67B` при нужде];
-  (b 🔧 framing) framebuffer во VRAM
-  (FB=0x14000000, 1920x1080 BGRA8888, pitch 7680, ~8 МиБ) + заливка 3 полос R/G/B
-  через PRAMIN + read-back (безопасно, вывод не трогаем); (c) core methods (raster/OR/
+  (b ✅ 🟢 HW 2026-07-15) framebuffer во VRAM
+  (FB=0x14000000, 1920x1080 BGRA8888, pitch 7680, size 0x7e9000) + заливка 3 полос R/G/B
+  через PRAMIN, read-back совпал (R=0x00ff0000 G=0x0000ff00 B=0x000000ff); пруф
+  `docs/hw-dumps/20260715-rtx4070s-layer5-C4b-fb-OK.log`; (c) core methods (raster/OR/
   control из EDID-таймингов) + `UPDATE`; (d) window methods (surface) + `UPDATE` →
   **картинка**. Тайминги — из EDID (прочитан в 5B). Для DP-монитора дополнительно
   `NV0073_CTRL_CMD_DP_CTRL` (link training).
