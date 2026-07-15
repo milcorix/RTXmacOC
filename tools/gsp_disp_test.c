@@ -289,6 +289,28 @@ static void test_assign_sor(void)
     CHECK(ld32(cp + NV_RM_CTRL_PARAMSIZE_OFF) == NV0073_ASSIGN_SOR_PARAMS_SIZE, "paramsSize == 80");
 }
 
+static void test_disp_push_method(void)
+{
+    printf("[test_disp_push_method]\n");
+    uint8_t pb[64]; memset(pb, 0, sizeof(pb));
+    uint32_t off = 0;
+    /* HEAD_SET_RASTER_SIZE(0) = 0x2064, data = 1920 | (1080<<16) */
+    uint32_t raster = 0x2064u;
+    uint32_t data = 1920u | (1080u << 16);
+    nv_gsp_disp_push_method(pb, &off, raster, data);
+    nv_gsp_disp_push_method(pb, &off, NVC37D_UPDATE, 0u);
+    CHECK(off == 16, "две записи → offset 16");
+    /* заголовок[0]: count=1<<18 | (addr&0x3ffc) */
+    uint32_t hdr0 = ld32(pb + 0);
+    CHECK(((hdr0 >> 29) & 0x7) == NVC37D_DMA_OPCODE_METHOD, "opcode == METHOD");
+    CHECK(((hdr0 >> 18) & 0x3ff) == 1, "count == 1");
+    CHECK((hdr0 & 0x3ffc) == 0x2064, "methodOffset == 0x2064 (RASTER_SIZE)");
+    CHECK(ld32(pb + 4) == data, "data == 1920|(1080<<16)");
+    uint32_t hdr1 = ld32(pb + 8);
+    CHECK((hdr1 & 0x3ffc) == NVC37D_UPDATE, "второй метод == UPDATE (0x200)");
+    CHECK(NVC77D_HEAD_SET_RASTER_SIZE(1) == 0x2464, "RASTER_SIZE(1) == 0x2464 (+0x400)");
+}
+
 int main(void)
 {
     test_disp_common_alloc();
@@ -302,6 +324,7 @@ int main(void)
     test_channel_pushbuffer();
     test_core_channel_alloc();
     test_assign_sor();
+    test_disp_push_method();
     printf(failed ? "\n=== gsp_disp_test: ЕСТЬ ПРОВАЛЫ ===\n" : "\n=== gsp_disp_test: ВСЕ ТЕСТЫ ПРОШЛИ ===\n");
     return failed ? 1 : 0;
 }

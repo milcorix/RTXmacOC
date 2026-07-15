@@ -208,3 +208,12 @@ int nv_gsp_disp_assign_sor(nv_gsp_rpc_chan *ch, uint32_t hClient, uint32_t hDisp
     if (out_sor) *out_sor = sor;
     return NV_GSP_RM_OK;
 }
+
+void nv_gsp_disp_push_method(uint8_t *pb, uint32_t *poff, uint32_t method_addr, uint32_t data)
+{
+    if (!pb || !poff) return;
+    uint32_t o = *poff;
+    st32(pb + o,     nv_disp_method_hdr(method_addr, 1u));   /* DMA-заголовок: 1 слово данных */
+    st32(pb + o + 4, data);                                  /* данные метода */
+    *poff = o + 8;
+}

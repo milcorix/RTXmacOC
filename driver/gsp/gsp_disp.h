@@ -63,6 +63,21 @@
 #define NV50VAIO_CHANDMA_CHANINST_OFF  0u
 #define NV50VAIO_CHANDMA_OFFSET_OFF   12u
 
+/* --- 5C.4: методы core-channel (NVC37D/NVC77D DMA) --- */
+/* DMA-слово метода: opcode[31:29] (METHOD=0), count[27:18], methodOffset[13:2]=addr>>2.
+   За заголовком идёт count слов данных. PUT@0/GET@4 — регистры user-региона канала. */
+#define NVC37D_DMA_OPCODE_METHOD   0u
+#define NVC37D_CORE_PUT_OFF        0x0u   /* user-регион core-channel: PUT */
+#define NVC37D_CORE_GET_OFF        0x4u   /* GET */
+#define NVC37D_UPDATE              0x0200u
+#define NVC77D_HEAD_SET_RASTER_SIZE(a)  (0x00002064u + (a)*0x400u)  /* WIDTH[14:0]|HEIGHT[30:16] */
+/* User-регион core-channel в BAR0 (r535_chan_user: core → 0x680000). */
+#define NVC77D_CORE_USER_BASE      0x00680000u
+
+/* Собрать DMA-заголовок метода (opcode METHOD, count слов данных). */
+static inline uint32_t nv_disp_method_hdr(uint32_t method_addr, uint32_t count)
+{ return ((NVC37D_DMA_OPCODE_METHOD) << 29) | ((count & 0x3ffu) << 18) | (method_addr & 0x3ffcu); }
+
 /* --- 5C.3: SOR acquire (ctrl0073dfp.h) --- */
 #define NV0073_CTRL_CMD_DFP_ASSIGN_SOR   0x731152u
 #define NV0073_ASSIGN_SOR_MAX_SORS       4u
@@ -204,5 +219,12 @@ int nv_gsp_disp_core_channel_alloc(nv_gsp_rpc_chan *ch, uint32_t hClient, uint32
  */
 int nv_gsp_disp_assign_sor(nv_gsp_rpc_chan *ch, uint32_t hClient, uint32_t hDispCommon,
                            uint32_t displayId, uint32_t *out_sor, uint32_t *status);
+
+/*
+ * 5C.4 (фундамент): дописать один метод core-channel (заголовок+данные) в пушбуфер pb
+ * по смещению *poff (в байтах, LE). Возврат: смещение продвинуто на 8. Кодирует
+ * DMA-слово (NVC37D_DMA opcode METHOD) + слово данных. Для сборки потока modeset.
+ */
+void nv_gsp_disp_push_method(uint8_t *pb, uint32_t *poff, uint32_t method_addr, uint32_t data);
 
 #endif /* RTXMACOC_GSP_DISP_H */

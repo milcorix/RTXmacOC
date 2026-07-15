@@ -65,9 +65,28 @@ DP 0x200→SOR1). Всё `NV_OK`. Пруфы:
   sorExcludeMask@8, sorAssignListWithTag[4]@40 {displayMask,sorType}, flags@76); индекс
   SOR = запись, чей displayMask содержит наш displayId (порт r535_outp_acquire). Затем
   для DP — link training `NV0073_CTRL_CMD_DP_CTRL`, для HDMI/TMDS — modeset напрямую.
-- **5C.4**: framebuffer-surface во VRAM (наш GMMU) + методы core/window channel
-  (SetRasterSize/SetContextDmaIso/SetSurfaceAddress/Update) → выставить mode из EDID,
-  включить scanout = картинка.
+- **5C.4** (🔧 фундамент — энкодер методов): framebuffer-surface во VRAM (наш GMMU) +
+  поток методов core/window channel → выставить mode из EDID, scanout = картинка.
+  Это самый большой под-шаг; метрика требует ВИЗУАЛЬНОГО подтверждения на мониторе.
+
+  **Формат DMA-методов дисплея (NVC37D_DMA, наследует NVC77D):** слово метода =
+  `opcode[31:29]=METHOD(0) | count[27:18] | methodOffset[13:2]=addr>>2`, за ним `count`
+  слов данных. Регистры канала: `PUT@0`, `GET@4` в user-регионе (core → `BAR0+0x680000`).
+  Реализован энкодер `nv_gsp_disp_push_method` (offline-тест) — фундамент под сборку
+  потока modeset. Метод-карта (clc37d.h/clc77d.h, база Volta):
+  - `HEAD_SET_RASTER_SIZE(h)` = `0x2064 + h*0x400` (WIDTH[14:0]|HEIGHT[30:16]);
+  - head-методы: базовый `0x2000 + h*0x400` (RASTER_SYNC_END/BLANK_START/BLANK_END,
+    SET_CONTROL, SET_PIXEL_CLOCK_FREQUENCY, SET_CONTROL_OUTPUT_RESOURCE, VIEWPORT_SIZE_IN/OUT);
+  - `SOR_SET_CONTROL(sor)`, `SET_CONTEXT_DMA_*`, финальный `UPDATE` (0x200).
+  - Surface — через window channel `NVC77E` (SET_STORAGE/SET_PARAMS/SET_CONTEXT_DMA_ISO/
+    SET_POINT_IN/SET_SIZE_IN/OUT/UPDATE) + IMM `NVC77B`.
+
+  **Оставшиеся шаги 5C.4** (по одному метрика-HW-прогону, для HDMI-монитора SOR0, без
+  DP link training): (a) window channel `NVC77E` + IMM alloc; (b) framebuffer во VRAM
+  (наш GMMU) + заливка тест-паттерна (CE-копия слоя 4); (c) core methods (raster/OR/
+  control из EDID-таймингов) + `UPDATE`; (d) window methods (surface) + `UPDATE` →
+  **картинка**. Тайминги — из EDID (прочитан в 5B). Для DP-монитора дополнительно
+  `NV0073_CTRL_CMD_DP_CTRL` (link training).
 
 ---
 
