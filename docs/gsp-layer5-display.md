@@ -1,10 +1,12 @@
 # Слой 5 — дисплей / modeset через GSP-RM
 
-**Статус:** 🟢 **5A+5B+5C.1+5C.2+5C.3 НА ЖЕЛЕЗЕ 2026-07-14** (RTX 4070S, Linux/VFIO).
-5C.1: RAMIN + display root `AD102_DISP` (0xc7700000). 5C.2: display-pushbuffer + core
-channel `AD102_DISP_CORE_CHANNEL_DMA` (0xc77d0000). 5C.3: SOR acquire (HDMI 0x100→SOR0,
-DP 0x200→SOR1). Всё `NV_OK`. Пруфы:
-`docs/hw-dumps/20260714-rtx4070s-layer5-C{1-disproot,2-corechan,3-sor}-OK.log`. Ниже: 5A —
+**Статус:** 🟢 **5A+5B+5C.1..5C.4a НА ЖЕЛЕЗЕ 2026-07-14..15** (RTX 4070S, Linux/VFIO).
+5C.1: RAMIN + display root `AD102_DISP` (0xc7700000). 5C.2: core channel
+`AD102_DISP_CORE_CHANNEL_DMA` (0xc77d0000). 5C.3: SOR acquire (HDMI→SOR0, DP→SOR1).
+5C.4a: window channel `GA102_DISP_WINDOW_CHANNEL_DMA` (0xc67e0000). Всё `NV_OK` — вся
+инфраструктура modeset (core+window+SOR) поднята. Пруфы:
+`docs/hw-dumps/20260714-rtx4070s-layer5-C{1-disproot,2-corechan,3-sor}-OK.log`,
+`docs/hw-dumps/20260715-rtx4070s-layer5-C4a-winchan-OK.log`. Ниже: 5A —
 `NV04_DISPLAY_COMMON`, `heads=4`, `displayMask=0x7f00` (7 выходов); 5B — перечислены
 типы/протоколы всех 7 OR (SOR TMDS/DP), **два монитора обнаружены** (`connected=0x300`),
 **EDID прочитан по DDC** (magic `00ffffffffffff00`, 384 байта). Эталон — nouveau
@@ -82,8 +84,10 @@ DP 0x200→SOR1). Всё `NV_OK`. Пруфы:
     SET_POINT_IN/SET_SIZE_IN/OUT/UPDATE) + IMM `NVC77B`.
 
   **Оставшиеся шаги 5C.4** (по одному метрика-HW-прогону, для HDMI-монитора SOR0, без
-  DP link training): (a 🔧 framing) window channel `GA102_DISP_WINDOW_CHANNEL_DMA (0xC67E)`
-  alloc (тем же путём, что core; handle 0xc67e0000) [+ IMM `0xC67B`]; (b) framebuffer во VRAM
+  DP link training): (a ✅ 🟢 HW 2026-07-15) window channel `GA102_DISP_WINDOW_CHANNEL_DMA
+  (0xC67E)` alloc (handle 0xc67e0000, `NV_OK`; пруф
+  `docs/hw-dumps/20260715-rtx4070s-layer5-C4a-winchan-OK.log`) [+ IMM `0xC67B` при нужде];
+  (b) framebuffer во VRAM
   (наш GMMU) + заливка тест-паттерна (CE-копия слоя 4); (c) core methods (raster/OR/
   control из EDID-таймингов) + `UPDATE`; (d) window methods (surface) + `UPDATE` →
   **картинка**. Тайминги — из EDID (прочитан в 5B). Для DP-монитора дополнительно
