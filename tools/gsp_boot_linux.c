@@ -892,6 +892,32 @@ static int run(const nv_mmio_t *io, struct arena *ar, const char *bdf)
                             printf("СЛОЙ 5 C.4a: WINDOW_CHANNEL_DMA rc=%d status=0x%x handle=0x%08x%s\n",
                                    wrc, wst, hwin,
                                    (wrc==NV_GSP_RM_OK && wst==0) ? "  ★ WINDOW CHANNEL ★" : "  (не OK)");
+
+                            /* --- СЛОЙ 5 C.4b: framebuffer во VRAM + тест-паттерн ---
+                               Выделяем FB во VRAM (1920x1080 BGRA), заливаем 3 полосы
+                               R/G/B через PRAMIN, читаем обратно. Безопасно (вывод не
+                               трогаем). FB — под surface для scanout (5C.4c-d). */
+                            {
+                                uint64_t fb_phys = 0x14000000ull;   /* FB во VRAM (usable) */
+                                uint32_t fb_w = 1920, fb_h = 1080;
+                                uint32_t pitch = fb_w * 4u;         /* BGRA8888 */
+                                uint64_t fb_size = (uint64_t)pitch * fb_h;
+                                uint32_t band = fb_h / 3u;
+                                uint64_t band_bytes = (uint64_t)pitch * band;
+                                /* BGRA (little-endian u32 0xAARRGGBB): красный/зелёный/синий */
+                                nv_pramin_fill(io, &win, fb_phys + 0*band_bytes, (uint32_t)band_bytes, 0x00ff0000u);
+                                nv_pramin_fill(io, &win, fb_phys + 1*band_bytes, (uint32_t)band_bytes, 0x0000ff00u);
+                                nv_pramin_fill(io, &win, fb_phys + 2*band_bytes,
+                                               (uint32_t)(fb_size - 2*band_bytes), 0x000000ffu);
+                                uint32_t p0 = nv_pramin_rd32(io, &win, fb_phys + 0*band_bytes);
+                                uint32_t p1 = nv_pramin_rd32(io, &win, fb_phys + 1*band_bytes);
+                                uint32_t p2 = nv_pramin_rd32(io, &win, fb_phys + 2*band_bytes);
+                                int fb_ok = (p0==0x00ff0000u && p1==0x0000ff00u && p2==0x000000ffu);
+                                printf("СЛОЙ 5 C.4b: FB=0x%llx %ux%u pitch=%u size=0x%llx read-back R=0x%08x G=0x%08x B=0x%08x %s\n",
+                                       (unsigned long long)fb_phys, fb_w, fb_h, pitch,
+                                       (unsigned long long)fb_size, p0, p1, p2,
+                                       fb_ok ? "  ★ ПАТТЕРН В VRAM ★" : "  (mismatch)");
+                            }
                         }
                     }
                 }

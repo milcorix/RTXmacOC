@@ -87,8 +87,9 @@
   DP link training): (a ✅ 🟢 HW 2026-07-15) window channel `GA102_DISP_WINDOW_CHANNEL_DMA
   (0xC67E)` alloc (handle 0xc67e0000, `NV_OK`; пруф
   `docs/hw-dumps/20260715-rtx4070s-layer5-C4a-winchan-OK.log`) [+ IMM `0xC67B` при нужде];
-  (b) framebuffer во VRAM
-  (наш GMMU) + заливка тест-паттерна (CE-копия слоя 4); (c) core methods (raster/OR/
+  (b 🔧 framing) framebuffer во VRAM
+  (FB=0x14000000, 1920x1080 BGRA8888, pitch 7680, ~8 МиБ) + заливка 3 полос R/G/B
+  через PRAMIN + read-back (безопасно, вывод не трогаем); (c) core methods (raster/OR/
   control из EDID-таймингов) + `UPDATE`; (d) window methods (surface) + `UPDATE` →
   **картинка**. Тайминги — из EDID (прочитан в 5B). Для DP-монитора дополнительно
   `NV0073_CTRL_CMD_DP_CTRL` (link training).
