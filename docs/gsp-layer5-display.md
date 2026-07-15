@@ -1,6 +1,9 @@
 # Слой 5 — дисплей / modeset через GSP-RM
 
-**Статус:** 🟢 **5A+5B+5C.1..5C.4b НА ЖЕЛЕЗЕ 2026-07-14..15** (RTX 4070S, Linux/VFIO).
+**Статус:** 🟢 **5A+5B+5C.1..5C.4d НА ЖЕЛЕЗЕ 2026-07-14..16** (RTX 4070S, Linux/VFIO).
+5C.4d: core-channel modeset САБМИТ проглочен (GET==PUT, 51 метод) — тайминг 1280x1024@108МГц
++ SOR0 запрограммированы, первая команда в дисплейный канал. Пруф
+`docs/hw-dumps/20260716-rtx4070s-layer5-C4d-coremodeset-OK.log`.
 5C.4b: framebuffer 1920x1080 во VRAM (0x14000000) залит R/G/B, read-back совпал.
 5C.1: RAMIN + display root `AD102_DISP` (0xc7700000). 5C.2: core channel
 `AD102_DISP_CORE_CHANNEL_DMA` (0xc77d0000). 5C.3: SOR acquire (HDMI→SOR0, DP→SOR1).
@@ -122,7 +125,17 @@
   **Открытый риск:** точная семантика `inst_offset` в context RAMHT (nvkm node->offset) и
   chid.user — проверяются на железе.
 
-  **5C.4d (оркестратор, готов к HW-прогону):** сабмит core-channel modeset БЕЗ surface/
+  **5C.4d 🟢 HW 2026-07-16:** core-channel modeset САБМИТ проглочен. EDID выбранного
+  TMDS-выхода (did=0x100→SOR0) распарсен: **1280x1024@108МГц, sync h+/v+**. Поток 408 байт
+  (51 метод: init 33 + modeset 15 + update 3) записан в core-пушбуфер (0x13410000) через
+  PRAMIN, PUT=0x198 → **GET=0x198 (GET==PUT)** — дисплейный движок исполнил весь поток
+  методов без ошибок канала. Тайминг+SOR0 запрограммированы. **Первая команда в дисплейный
+  канал на железе.** Механизм сабмита (PRAMIN+PUT/GET, NV507C PTR[11:2]) подтверждён.
+  Пруф: `docs/hw-dumps/20260716-rtx4070s-layer5-C4d-coremodeset-OK.log`.
+  Примечание: монитор 1280x1024 (не 1920x1080) — для 5C.4e FB+window строить под нативное
+  разрешение из EDID. Пиксели → 5C.4e (window surface + ctx-dma/RAMHT).
+
+  **5C.4d (оркестратор):** сабмит core-channel modeset БЕЗ surface/
   ctx-dma (де-риск: сначала проверяем сам механизм сабмита + программу таймингов). В
   `tools/gsp_boot_linux.c`: парсим EDID выбранного TMDS-выхода → строим поток
   `build_core_init(notifier=0)` + `build_core_modeset` + `build_core_update(interlock=0)`

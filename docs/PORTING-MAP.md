@@ -103,7 +103,7 @@ doorbell (`AMPERE_USERMODE_A 0xC561`) → host-семафор `0xcafe0001`, read
 Первая команда GPU исполнена; слой 4 замкнут. Пруф:
 `docs/hw-dumps/20260714-rtx4070s-layer4-passC-exec-OK.log`.
 
-## Слой 5 — дисплей (enum + EDID + display root + core channel + SOR) — 🟢 5A+5B+5C.1..3 НА ЖЕЛЕЗЕ 2026-07-14
+## Слой 5 — дисплей (enum + EDID + display root + core/window channel + SOR + modeset-сабмит) — 🟢 5A+5B+5C.1..4d НА ЖЕЛЕЗЕ 2026-07-14..16
 
 `driver/gsp/gsp_disp.{c,h}` (порт nouveau `disp/r535.c`), офлайн-тест
 `tools/gsp_disp_test.c`. Тех-запись: `docs/gsp-layer5-display.md`. Пруф:
@@ -122,8 +122,16 @@ doorbell (`AMPERE_USERMODE_A 0xC561`) → host-семафор `0xcafe0001`, read
 | `nv_gsp_disp_channel_pushbuffer` | `ctrl2080internal.h` `DISPLAY_CHANNEL_PUSHBUFFER` + `r535_chan_push` | cmd=0x20800a58 (40б): addressSpace@0 physicalAddr@8 limit@16 cacheSnoop@24 hclass@28 channelInstance@32 valid@36; на внутр. subdevice | 🟢 HW (status=NV_OK) |
 | `nv_gsp_disp_core_channel_alloc` | `r535_dmac_init` + `nvos.h`/`nvif/class.h` | `AD102_DISP_CORE_CHANNEL_DMA`=0xC77D, hObject=class<<16=0xc77d0000 под display root, params `NV50VAIO_CHANNELDMA_ALLOCATION_PARAMETERS` (32б: channelInstance@0, offset@12) | 🟢 HW (core channel) |
 | `nv_gsp_disp_assign_sor` | `ctrl0073dfp.h` `DFP_ASSIGN_SOR` + `r535_outp_acquire` | cmd=0x731152 (80б): displayId@4 sorExcludeMask@8 sorAssignListWithTag[4]@40 ({displayMask,sorType} 8б) flags@76; SOR = запись с нашим displayMask | 🟢 HW (HDMI→SOR0, DP→SOR1) |
+| `nv_gsp_disp_core_channel_alloc` (window) | `r535_dmac_init` | `GA102_DISP_WINDOW_CHANNEL_DMA`=0xC67E, hObject=0xc67e0000 | 🟢 HW (window channel) |
+| `nv_gsp_disp_build_core_modeset`/`_init`/`_update` | `headc37d_mode`/`corec37d_init`/`_update` + `clc37d.h` | поток NVC37D-методов modeset (raster/pclk/SOR/usage/interlock/UPDATE) | 🟢 HW (5C.4d: сабмит проглочен) |
+| `nv_gsp_disp_build_window_image`/`_update` | `wndwc37e_image_set`/`_update` + `clc37e.h` | поток NVC37E surface-методов (size/storage/params/ISO/offset) | 📄 SRC (5C.4e) |
+| `nv_gsp_disp_build_ctxdma_desc`/`ramht_entry` | `gv100_dmaobj_bind`/`nvkm_ramht`/`r535_dmac_bind` | 24б ctx-dma дескриптор + RAMHT-запись | 📄 SRC (5C.4e) |
+| сабмит: PRAMIN→PUT/GET | `nv50_dmac_kick` + `cl507c.h` | поток в пушбуфер VRAM, PUT@user+0x0 (PTR[11:2]=байт), poll GET | 🟢 HW (5C.4d GET==PUT) |
 
-Дальше: 5C.4 (framebuffer во VRAM + методы core channel = modeset/scanout = картинка);
+**5C.4d 🟢 HW 2026-07-16:** core-channel modeset сабмит — EDID→1280x1024@108МГц (did=0x100
+→SOR0), поток 51 метод в core-пушбуфер (0x13410000) через PRAMIN, PUT=0x198→GET=0x198.
+Пруф `docs/hw-dumps/20260716-rtx4070s-layer5-C4d-coremodeset-OK.log`.
+Дальше: **5C.4e** (window surface + ctx-dma/RAMHT под нативное EDID-разрешение = пиксели);
 для DP — link training `DP_CTRL`, для HDMI `SPECIFIC_SET_HDMI_ENABLE`.
 
 ## Конкретные upstream-ссылки (raw, ветка master ядра)

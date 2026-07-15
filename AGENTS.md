@@ -208,10 +208,16 @@ docs/                   архитектура, роадмап, конспект
   DMA-методов дисплея — `nv_gsp_disp_push_method`. Тех-запись: **`docs/gsp-layer5-display.md`**.
   Аппаратный modeset-трек (Linux/VFIO). **5C.4b 🟢 HW**: framebuffer 1920x1080 BGRA во
   VRAM (0x14000000) залит R/G/B через PRAMIN, read-back совпал (пруф
-  `docs/hw-dumps/20260715-rtx4070s-layer5-C4b-fb-OK.log`). Дальше: 5C.4c-d (методы
-  core/window channel SetRaster/SetContextDmaIso/SetSurface/Update = **картинка**;
-  метрика — визуально на мониторе). Интеграция в macOS WindowServer — ОТДЕЛЬНЫЙ трек,
-  замок Apple (гейт R10).
+  `docs/hw-dumps/20260715-rtx4070s-layer5-C4b-fb-OK.log`). **5C.4c**: полный поток методов
+  modeset собран (build_core_init/modeset/update, build_window_image/update, ctx-dma
+  дескриптор + RAMHT-запись) — офлайн-зелёный. **5C.4d 🟢 HW 2026-07-16**: core-channel
+  modeset САБМИТ проглочен — EDID выбранного TMDS-выхода (did=0x100→SOR0) распарсен
+  (**1280x1024@108МГц**), поток 408б/51 метод записан в core-пушбуфер через PRAMIN,
+  PUT=0x198 → **GET=0x198 (GET==PUT)** — дисплейный движок исполнил методы, тайминг+SOR0
+  запрограммированы (первая команда в дисплейный канал). Пруф
+  `docs/hw-dumps/20260716-rtx4070s-layer5-C4d-coremodeset-OK.log`. Дальше: 5C.4e (window
+  surface + ctx-dma/RAMHT под нативное EDID-разрешение = **картинка**; метрика — визуально
+  на мониторе). Интеграция в macOS WindowServer — ОТДЕЛЬНЫЙ трек, замок Apple (гейт R10).
 
 ## Ключевые источники (референс-база)
 
