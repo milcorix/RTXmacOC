@@ -311,6 +311,53 @@ static void test_disp_push_method(void)
     CHECK(NVC77D_HEAD_SET_RASTER_SIZE(1) == 0x2464, "RASTER_SIZE(1) == 0x2464 (+0x400)");
 }
 
+static void test_edid_dtd_and_modeset(void)
+{
+    printf("[test_edid_dtd_and_modeset]\n");
+    /* Синтетический EDID со стандартным DTD 1920x1080@60 (CVT-подобные тайминги):
+       pclk=148500кГц→14850 (10кГц), hact=1920 hblank=280, vact=1080 vblank=45,
+       hsync_off=88 hsync_w=44, vsync_off=4 vsync_w=5. */
+    uint8_t e[128]; memset(e, 0, sizeof(e));
+    uint8_t *d = e + 54;
+    uint32_t pclk10 = 14850;
+    d[0] = pclk10 & 0xff; d[1] = pclk10 >> 8;
+    d[2] = 1920 & 0xff;  d[3] = 280 & 0xff;  d[4] = ((1920>>8)<<4) | ((280>>8)&0xf);
+    d[5] = 1080 & 0xff;  d[6] = 45  & 0xff;  d[7] = ((1080>>8)<<4) | ((45>>8)&0xf);
+    d[8] = 88 & 0xff;    d[9] = 44 & 0xff;
+    d[10] = ((4 & 0xf) << 4) | (5 & 0xf);
+    d[11] = (((88>>8)&0x3)<<6) | (((44>>8)&0x3)<<4) | (((4>>4)&0x3)<<2) | ((5>>4)&0x3);
+    d[17] = 0x1e;   /* digital sync, h+/v+ positive (биты 1,2 set) */
+
+    nv_edid_timing t; memset(&t, 0, sizeof(t));
+    int rc = nv_edid_parse_dtd(e, sizeof(e), &t);
+    CHECK(rc == 0, "parse_dtd OK");
+    CHECK(t.pclk_khz == 148500, "pclk == 148500 кГц");
+    CHECK(t.hact == 1920 && t.vact == 1080, "hact/vact == 1920/1080");
+    CHECK(t.hblank == 280 && t.vblank == 45, "hblank/vblank == 280/45");
+    CHECK(t.hsync_off == 88 && t.hsync_w == 44, "hsync off/w == 88/44");
+    CHECK(t.vsync_off == 4 && t.vsync_w == 5, "vsync off/w == 4/5");
+    CHECK(t.hsync_pos == 1 && t.vsync_pos == 1, "sync polarity positive");
+
+    uint8_t pb[256]; memset(pb, 0, sizeof(pb)); uint32_t off = 0;
+    nv_gsp_disp_build_core_modeset(pb, &off, &t, /*head*/0, /*sor*/0,
+                                   NVC37D_SOR_PROTOCOL_SINGLE_TMDS_A);
+    CHECK(off == 11*8, "поток: 11 методов (SOR/PROCAMP/ORES/4×raster/2×viewport/CTRL/UPDATE)");
+    /* первый метод — SOR_SET_CONTROL(0) = OWNER head0(1) | TMDS_A<<8 */
+    CHECK((ld32(pb+0) & 0x3ffc) == NVC37D_SOR_SET_CONTROL(0), "метод[0] == SOR_SET_CONTROL(0)");
+    CHECK(ld32(pb+4) == (1u | (NVC37D_SOR_PROTOCOL_SINGLE_TMDS_A << 8)), "SOR: OWNER head0 | TMDS_A");
+    /* найти RASTER_SIZE в потоке и проверить htotal|vtotal */
+    int found = 0;
+    for (uint32_t o = 0; o < off; o += 8) {
+        if ((ld32(pb+o) & 0x3ffc) == NVC77D_HEAD_SET_RASTER_SIZE(0)) {
+            CHECK(ld32(pb+o+4) == ((1920u+280u) | ((1080u+45u) << 16)), "RASTER_SIZE = htotal|vtotal");
+            found = 1;
+        }
+    }
+    CHECK(found, "RASTER_SIZE присутствует в потоке");
+    /* последний метод — UPDATE */
+    CHECK((ld32(pb + off - 8) & 0x3ffc) == NVC37D_UPDATE, "последний метод == UPDATE");
+}
+
 int main(void)
 {
     test_disp_common_alloc();
@@ -325,6 +372,7 @@ int main(void)
     test_core_channel_alloc();
     test_assign_sor();
     test_disp_push_method();
+    test_edid_dtd_and_modeset();
     printf(failed ? "\n=== gsp_disp_test: ЕСТЬ ПРОВАЛЫ ===\n" : "\n=== gsp_disp_test: ВСЕ ТЕСТЫ ПРОШЛИ ===\n");
     return failed ? 1 : 0;
 }

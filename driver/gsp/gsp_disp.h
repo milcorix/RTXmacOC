@@ -82,6 +82,47 @@
 static inline uint32_t nv_disp_method_hdr(uint32_t method_addr, uint32_t count)
 { return ((NVC37D_DMA_OPCODE_METHOD) << 29) | ((count & 0x3ffu) << 18) | (method_addr & 0x3ffcu); }
 
+/* Смещения методов core-channel (NVC37D, база Volta; head a, or a). */
+#define NVC37D_HEAD_SET_PROCAMP(a)                 (0x00002000u + (a)*0x400u)
+#define NVC37D_HEAD_SET_CONTROL_OUTPUT_RESOURCE(a) (0x00002004u + (a)*0x400u)
+#define NVC37D_HEAD_SET_CONTROL_METH(a)            (0x00002008u + (a)*0x400u)
+#define NVC37D_HEAD_SET_VIEWPORT_SIZE_IN(a)        (0x0000204Cu + (a)*0x400u)
+#define NVC37D_HEAD_SET_VIEWPORT_SIZE_OUT(a)       (0x00002058u + (a)*0x400u)
+#define NVC37D_HEAD_SET_RASTER_SYNC_END(a)         (0x00002068u + (a)*0x400u)
+#define NVC37D_HEAD_SET_RASTER_BLANK_END(a)        (0x0000206Cu + (a)*0x400u)
+#define NVC37D_HEAD_SET_RASTER_BLANK_START(a)      (0x00002070u + (a)*0x400u)
+#define NVC37D_SOR_SET_CONTROL(a)                  (0x00000300u + (a)*0x20u)
+#define NVC37D_WINDOW_SET_CONTROL(a)               (0x00001000u + (a)*0x80u)
+/* поля HEAD_SET_CONTROL_OUTPUT_RESOURCE: HSYNC@2, VSYNC@3, PIXEL_DEPTH[7:4] (24_444=4). */
+#define NVC37D_ORESOURCE_PIXEL_DEPTH_BPP_24_444    4u
+/* SOR_SET_CONTROL: OWNER_MASK[7:0]=1<<head, PROTOCOL[11:8]. */
+#define NVC37D_SOR_PROTOCOL_SINGLE_TMDS_A          1u
+#define NVC37D_SOR_PROTOCOL_DP_A                   8u
+#define NVC37D_SOR_PROTOCOL_DP_B                   9u
+
+/* Детальный тайминг из EDID (DTD @54). */
+typedef struct {
+    uint32_t pclk_khz;                  /* пиксельклок, кГц */
+    uint32_t hact, hblank, hsync_off, hsync_w;
+    uint32_t vact, vblank, vsync_off, vsync_w;
+    uint8_t  hsync_pos, vsync_pos;      /* полярность (1=positive) */
+} nv_edid_timing;
+
+/*
+ * Распарсить первый Detailed Timing Descriptor из EDID (128+ байт) в *t.
+ * Возврат 0 при валидном DTD (pclk!=0), -1 иначе. Стандартный декод EDID DTD.
+ */
+int nv_edid_parse_dtd(const uint8_t *edid, uint32_t edid_len, nv_edid_timing *t);
+
+/*
+ * 5C.4c: собрать поток методов core-channel modeset в pb[*off] по таймингу t для
+ * head/sor/protocol: SOR_SET_CONTROL, HEAD_SET_PROCAMP, OUTPUT_RESOURCE, RASTER_SIZE/
+ * SYNC_END/BLANK_END/BLANK_START, VIEWPORT_SIZE_IN/OUT, HEAD_SET_CONTROL, UPDATE.
+ * Возврат: *off продвинут. Порт nouveau nv50_head_mode + dispnv50 core.
+ */
+void nv_gsp_disp_build_core_modeset(uint8_t *pb, uint32_t *off, const nv_edid_timing *t,
+                                    uint32_t head, uint32_t sor, uint32_t protocol);
+
 /* --- 5C.3: SOR acquire (ctrl0073dfp.h) --- */
 #define NV0073_CTRL_CMD_DFP_ASSIGN_SOR   0x731152u
 #define NV0073_ASSIGN_SOR_MAX_SORS       4u

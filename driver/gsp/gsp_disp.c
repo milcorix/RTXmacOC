@@ -217,3 +217,61 @@ void nv_gsp_disp_push_method(uint8_t *pb, uint32_t *poff, uint32_t method_addr, 
     st32(pb + o + 4, data);                                  /* данные метода */
     *poff = o + 8;
 }
+
+int nv_edid_parse_dtd(const uint8_t *edid, uint32_t edid_len, nv_edid_timing *t)
+{
+    if (!edid || !t || edid_len < 128) return -1;
+    const uint8_t *d = edid + 54;                 /* первый DTD */
+    uint32_t pclk = (uint32_t)d[0] | ((uint32_t)d[1] << 8);
+    if (pclk == 0) return -1;                     /* это не DTD (display descriptor) */
+    t->pclk_khz  = pclk * 10u;                    /* поле в единицах 10 кГц */
+    t->hact      = d[2] | ((uint32_t)(d[4] & 0xf0) << 4);
+    t->hblank    = d[3] | ((uint32_t)(d[4] & 0x0f) << 8);
+    t->vact      = d[5] | ((uint32_t)(d[7] & 0xf0) << 4);
+    t->vblank    = d[6] | ((uint32_t)(d[7] & 0x0f) << 8);
+    t->hsync_off = d[8]  | ((uint32_t)(d[11] & 0xc0) << 2);
+    t->hsync_w   = d[9]  | ((uint32_t)(d[11] & 0x30) << 4);
+    t->vsync_off = (d[10] >> 4) | ((uint32_t)(d[11] & 0x0c) << 2);
+    t->vsync_w   = (d[10] & 0x0f) | ((uint32_t)(d[11] & 0x03) << 4);
+    /* Полярность sync — из features bitmap d[17] (для digital sync биты 1..2). */
+    t->hsync_pos = (d[17] & 0x02) ? 1 : 0;
+    t->vsync_pos = (d[17] & 0x04) ? 1 : 0;
+    return 0;
+}
+
+void nv_gsp_disp_build_core_modeset(uint8_t *pb, uint32_t *off, const nv_edid_timing *t,
+                                    uint32_t head, uint32_t sor, uint32_t protocol)
+{
+    if (!pb || !off || !t) return;
+    uint32_t htotal = t->hact + t->hblank;
+    uint32_t vtotal = t->vact + t->vblank;
+    /* Координаты raster (nvd): sync_end = ширина sync-1; blank_end = sync+back_porch-1
+       = hblank - hsync_off - 1; blank_start = blank_end + active. */
+    uint32_t hbe = t->hblank - t->hsync_off - 1u;
+    uint32_t vbe = t->vblank - t->vsync_off - 1u;
+    uint32_t hbs = hbe + t->hact;
+    uint32_t vbs = vbe + t->vact;
+
+    /* SOR: владелец = head, протокол (TMDS/DP). */
+    nv_gsp_disp_push_method(pb, off, NVC37D_SOR_SET_CONTROL(sor),
+                            (1u << head) | (protocol << 8));
+    /* head: RGB procamp; output resource: полярности + 24bpp. */
+    nv_gsp_disp_push_method(pb, off, NVC37D_HEAD_SET_PROCAMP(head), 0u);
+    uint32_t ores = (NVC37D_ORESOURCE_PIXEL_DEPTH_BPP_24_444 << 4)
+                  | (t->hsync_pos ? 0u : (1u << 2))    /* NEGATIVE_TRUE=1 если не positive */
+                  | (t->vsync_pos ? 0u : (1u << 3));
+    nv_gsp_disp_push_method(pb, off, NVC37D_HEAD_SET_CONTROL_OUTPUT_RESOURCE(head), ores);
+    /* raster. */
+    nv_gsp_disp_push_method(pb, off, NVC77D_HEAD_SET_RASTER_SIZE(head), htotal | (vtotal << 16));
+    nv_gsp_disp_push_method(pb, off, NVC37D_HEAD_SET_RASTER_SYNC_END(head),
+                            (t->hsync_w - 1u) | ((t->vsync_w - 1u) << 16));
+    nv_gsp_disp_push_method(pb, off, NVC37D_HEAD_SET_RASTER_BLANK_END(head),  hbe | (vbe << 16));
+    nv_gsp_disp_push_method(pb, off, NVC37D_HEAD_SET_RASTER_BLANK_START(head), hbs | (vbs << 16));
+    /* viewport = активная область. */
+    nv_gsp_disp_push_method(pb, off, NVC37D_HEAD_SET_VIEWPORT_SIZE_IN(head),  t->hact | (t->vact << 16));
+    nv_gsp_disp_push_method(pb, off, NVC37D_HEAD_SET_VIEWPORT_SIZE_OUT(head), t->hact | (t->vact << 16));
+    /* head control: progressive. */
+    nv_gsp_disp_push_method(pb, off, NVC37D_HEAD_SET_CONTROL_METH(head), 0u);
+    /* применить. */
+    nv_gsp_disp_push_method(pb, off, NVC37D_UPDATE, 0u);
+}

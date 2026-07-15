@@ -91,7 +91,10 @@
   (b ✅ 🟢 HW 2026-07-15) framebuffer во VRAM
   (FB=0x14000000, 1920x1080 BGRA8888, pitch 7680, size 0x7e9000) + заливка 3 полос R/G/B
   через PRAMIN, read-back совпал (R=0x00ff0000 G=0x0000ff00 B=0x000000ff); пруф
-  `docs/hw-dumps/20260715-rtx4070s-layer5-C4b-fb-OK.log`; (c) core methods (raster/OR/
+  `docs/hw-dumps/20260715-rtx4070s-layer5-C4b-fb-OK.log`; (c 🔧 framing: EDID DTD-парсер `nv_edid_parse_dtd` + билдер потока
+  core-методов `nv_gsp_disp_build_core_modeset` (SOR_SET_CONTROL/PROCAMP/OUTPUT_RESOURCE/
+  RASTER_SIZE/SYNC_END/BLANK_END/BLANK_START/VIEWPORT_IN/OUT/CONTROL/UPDATE), offline-тест
+  на 1920x1080; **пробел: HEAD_SET_PIXEL_CLOCK ещё не найден** — нужен для HW) core methods (raster/OR/
   control из EDID-таймингов) + `UPDATE`; (d) window methods (surface) + `UPDATE` →
   **картинка**. Тайминги — из EDID (прочитан в 5B). Для DP-монитора дополнительно
   `NV0073_CTRL_CMD_DP_CTRL` (link training).
