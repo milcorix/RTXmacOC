@@ -73,10 +73,81 @@
 #define NVC37D_DMA_OPCODE_METHOD   0u
 #define NVC37D_CORE_PUT_OFF        0x0u   /* user-регион core-channel: PUT */
 #define NVC37D_CORE_GET_OFF        0x4u   /* GET */
-#define NVC37D_UPDATE              0x0200u
+#define NVC37D_UPDATE              0x0200u   /* данные: 0x1 | SPECIAL_HANDLING NONE | INHIBIT_INTERRUPTS FALSE */
+#define NVC37D_UPDATE_DATA         0x00000001u
 #define NVC77D_HEAD_SET_RASTER_SIZE(a)  (0x00002064u + (a)*0x400u)  /* WIDTH[14:0]|HEIGHT[30:16] */
-/* User-регион core-channel в BAR0 (r535_chan_user: core → 0x680000). */
+/* User-регион core-channel в BAR0 (r535_chan_user: core → 0x680000, size 0x10000).
+   PUT@offset0 регистр (r535_core_fini читает suspend_put из 0x680000), в DWORD-единицах.
+   Window user-регион: 0x690000 + head*0x1000 (r535_chan_user case 0x7e). */
 #define NVC77D_CORE_USER_BASE      0x00680000u
+#define NVC37E_WINDOW_USER_BASE    0x00690000u   /* + head*0x1000 */
+#define NVC37D_CHAN_PUT_OFF        0x0u          /* PUT (DWORD offset потока), MMIO в user-регион */
+
+/* --- 5C.4c: доп. методы core-channel head-modeset (clc37d.h, сверено) --- */
+#define NVC37D_HEAD_SET_PIXEL_CLOCK_FREQUENCY(a)      (0x0000200Cu + (a)*0x400u)  /* HERTZ[30:0]=kHz*1000 */
+#define NVC37D_HEAD_SET_PIXEL_CLOCK_FREQUENCY_MAX(a)  (0x00002028u + (a)*0x400u)
+#define NVC37D_HEAD_SET_HEAD_USAGE_BOUNDS(a)          (0x00002030u + (a)*0x400u)
+#define NVC37D_HEAD_SET_VIEWPORT_POINT_IN(a)          (0x00002048u + (a)*0x400u)
+#define NVC37D_HEAD_SET_RASTER_VERT_BLANK2(a)         (0x00002074u + (a)*0x400u)  /* blank2e<<16|blank2s (progressive: 0<<16|1) */
+/* HEAD_USAGE_BOUNDS: CURSOR W256_H256=4[2:0], OUTPUT_LUT 1025=2[5:4], UPSCALING_ALLOWED=1[8:8]. */
+#define NVC37D_HEAD_USAGE_BOUNDS_DEFAULT   (4u | (2u << 4) | (1u << 8))  /* 0x124 */
+/* HEAD_SET_CONTROL(0x2008): STRUCTURE[1:0] PROGRESSIVE=0. */
+#define NVC37D_HEAD_CONTROL_PROGRESSIVE    0u
+
+/* --- 5C.4d: core-level методы (channel-scope, clc37d.h, сверено) --- */
+#define NVC37D_SET_CONTEXT_DMA_NOTIFIER    0x00000208u  /* HANDLE[31:0] */
+#define NVC37D_SET_INTERLOCK_FLAGS         0x00000218u  /* INTERLOCK_WITH_CURSOR(i) bit i; WITH_CORE bit16 */
+#define NVC37D_SET_WINDOW_INTERLOCK_FLAGS  0x0000021Cu  /* INTERLOCK_WITH_WINDOW(i) bit i */
+#define NVC37D_WINDOW_SET_WINDOW_FORMAT_USAGE_BOUNDS(a)         (0x00001004u + (a)*0x80u)
+#define NVC37D_WINDOW_SET_WINDOW_ROTATED_FORMAT_USAGE_BOUNDS(a) (0x00001008u + (a)*0x80u)
+#define NVC37D_WINDOW_SET_WINDOW_USAGE_BOUNDS(a)               (0x00001010u + (a)*0x80u)
+#define NVC37D_WINDOW_SET_CONTROL_OWNER(a)                     (0x00001000u + (a)*0x80u)  /* OWNER[3:0]=HEAD(i) */
+/* FORMAT_USAGE_BOUNDS: RGB_PACKED 1/2/4/8BPP[0..3] + YUV_PACKED422[4] = 0x1F (как corec37d_init). */
+#define NVC37D_WIN_FORMAT_USAGE_DEFAULT    0x0000001Fu
+/* USAGE_BOUNDS: MAX_PIXELS_FETCHED_PER_LINE[14:0]=0x7fff | INPUT_LUT 1025=2<<16 | INPUT_SCALER_TAPS TAPS_2=1<<20. */
+#define NVC37D_WIN_USAGE_BOUNDS_DEFAULT    (0x7fffu | (2u << 16) | (1u << 20))  /* 0x127fff */
+#define NVC37D_INTERLOCK_WITH_CORE_BIT     (1u << 16)   /* в SET_INTERLOCK_FLAGS core */
+
+/* --- 5C.4d: window-channel класс NVC37E (GA102_DISP_WINDOW_CHANNEL_DMA, clc37e.h) --- */
+#define NVC37E_UPDATE                  0x00000200u   /* данные: 0x1 (| INTERLOCK_WITH_WIN_IMM) */
+#define NVC37E_SET_PRESENT_CONTROL     0x00000308u   /* MIN_PRESENT_INTERVAL[3:0]|BEGIN_MODE[6:4] NON_TEARING=0 */
+#define NVC37E_SET_SIZE                0x00000224u   /* WIDTH[15:0]|HEIGHT[31:16] */
+#define NVC37E_SET_STORAGE             0x00000228u   /* BLOCK_HEIGHT[3:0]|MEMORY_LAYOUT[4:4] (PITCH=1) */
+#define NVC37E_SET_PARAMS              0x0000022Cu   /* FORMAT[7:0]|COLOR_SPACE[9:8]|INPUT_RANGE[13:12] */
+#define NVC37E_SET_PLANAR_STORAGE(b)   (0x00000230u + (b)*0x4u)  /* PITCH[12:0]=pitch>>6 */
+#define NVC37E_SET_CONTEXT_DMA_ISO(b)  (0x00000240u + (b)*0x4u)  /* HANDLE[31:0] */
+#define NVC37E_SET_OFFSET(b)           (0x00000260u + (b)*0x4u)  /* ORIGIN[31:0]=offset>>8 */
+#define NVC37E_SET_POINT_IN(b)         (0x00000290u + (b)*0x4u)  /* X[15:0]|Y[31:16] */
+#define NVC37E_SET_SIZE_IN             0x00000298u   /* WIDTH[14:0]|HEIGHT[30:16] */
+#define NVC37E_SET_SIZE_OUT            0x000002A4u   /* WIDTH[14:0]|HEIGHT[30:16] */
+#define NVC37E_SET_INTERLOCK_FLAGS     0x00000370u   /* WITH_CORE[0:0]|WITH_CURSOR(i)[i+1] */
+#define NVC37E_SET_WINDOW_INTERLOCK_FLAGS 0x00000374u
+#define NVC37E_STORAGE_MEMORY_LAYOUT_PITCH  (1u << 4)
+#define NVC37E_PARAMS_FORMAT_X8R8G8B8   0xE6u   /* dword A/X,R,G,B (наш FB: 0x00RRGGBB) */
+#define NVC37E_PARAMS_FORMAT_A8R8G8B8   0xCFu
+#define NVC37E_INTERLOCK_WITH_CORE_BIT  (1u << 0)   /* в NVC37E SET_INTERLOCK_FLAGS */
+
+/* --- 5C.4d: ctx-dma (NV_DMA_IN_MEMORY) для SET_CONTEXT_DMA_ISO/NOTIFIER --- */
+#define NV_DMA_IN_MEMORY               0x0000003du   /* nvif/class.h */
+/* Дескриптор ctx-dma Volta+ (gv100_dmaobj_bind, 24б, 16-align, в inst-mem дисплея):
+   @0x00 flags0; @0x04 start>>8 lo; @0x08 start>>8 hi; @0x0c limit>>8 lo; @0x10 limit>>8 hi. */
+#define NV_CTXDMA_DESC_SIZE            24u
+#define NV_CTXDMA_FLAGS0_VRAM          0x00000001u
+#define NV_CTXDMA_FLAGS0_RW            0x00000004u
+#define NV_CTXDMA_FLAGS0_PAGE_SP       0x00000040u   /* GF119_DMA_V0_PAGE_SP */
+#define NV_CTXDMA_FLAGS0_VRAM_RW       (NV_CTXDMA_FLAGS0_VRAM | NV_CTXDMA_FLAGS0_RW | NV_CTXDMA_FLAGS0_PAGE_SP)  /* 0x45 */
+/* RAMHT дисплея (nvkm_ramht): в первых 0x1000 inst-mem, запись 8б {handle@0, context@4};
+   size=512 (bits=9). hash: XOR(handle по bits) ^ chid<<(bits-4). context = chid<<25 |
+   (client&0x3fff) | (inst_offset << 9), где inst_offset — смещение дескриптора в inst-mem. */
+#define NV_DISP_RAMHT_BITS             9u
+#define NV_DISP_RAMHT_SIZE             512u
+#define NV_DISP_RAMHT_ENTRY            8u
+/* chid.user (disp_chan.c: user->user + id): core=0, window=1+head. */
+#define NV_DISP_CHID_CORE              0u
+#define NV_DISP_CHID_WINDOW(head)      (1u + (head))
+/* Хэндлы ctx-dma (как nv50: HANDLE_SYNCBUF/HANDLE_VRAM), произвольные, ищутся в RAMHT. */
+#define NV_DISP_HANDLE_SYNCBUF         0xcaf00001u
+#define NV_DISP_HANDLE_VRAM            0xcaf00002u
 
 /* Собрать DMA-заголовок метода (opcode METHOD, count слов данных). */
 static inline uint32_t nv_disp_method_hdr(uint32_t method_addr, uint32_t count)
@@ -115,13 +186,60 @@ typedef struct {
 int nv_edid_parse_dtd(const uint8_t *edid, uint32_t edid_len, nv_edid_timing *t);
 
 /*
- * 5C.4c: собрать поток методов core-channel modeset в pb[*off] по таймингу t для
- * head/sor/protocol: SOR_SET_CONTROL, HEAD_SET_PROCAMP, OUTPUT_RESOURCE, RASTER_SIZE/
- * SYNC_END/BLANK_END/BLANK_START, VIEWPORT_SIZE_IN/OUT, HEAD_SET_CONTROL, UPDATE.
- * Возврат: *off продвинут. Порт nouveau nv50_head_mode + dispnv50 core.
+ * 5C.4c: собрать поток методов core-channel head/OR-modeset в pb[*off] по таймингу t
+ * для head/sor/protocol (БЕЗ финального UPDATE — его добавляет _build_core_update):
+ * SOR_SET_CONTROL, HEAD_SET_PROCAMP, OUTPUT_RESOURCE, RASTER_SIZE/SYNC_END/BLANK_END/
+ * BLANK_START/VERT_BLANK2, HEAD_SET_CONTROL(progressive), PIXEL_CLOCK_FREQUENCY(+MAX),
+ * HEAD_USAGE_BOUNDS, VIEWPORT_POINT_IN/SIZE_IN/SIZE_OUT. Порт headc37d_mode/_or/_view.
+ * Возврат: *off продвинут (15 методов).
  */
 void nv_gsp_disp_build_core_modeset(uint8_t *pb, uint32_t *off, const nv_edid_timing *t,
                                     uint32_t head, uint32_t sor, uint32_t protocol);
+
+/*
+ * 5C.4d: core-channel init (порт corec37d_init + corec37d_wndw_owner). В pb[*off]:
+ * SET_CONTEXT_DMA_NOTIFIER=notifier_handle; для 8 окон FORMAT_USAGE_BOUNDS+ROTATED(0)+
+ * USAGE_BOUNDS; для 8 окон WINDOW_SET_CONTROL OWNER=HEAD(i>>1). БЕЗ UPDATE.
+ */
+void nv_gsp_disp_build_core_init(uint8_t *pb, uint32_t *off, uint32_t notifier_handle);
+
+/*
+ * 5C.4d: финальный UPDATE core-channel (порт corec37d_update, ntfy=false). В pb[*off]:
+ * SET_INTERLOCK_FLAGS=0, SET_WINDOW_INTERLOCK_FLAGS=wndw_interlock_mask, UPDATE=0x1.
+ * wndw_interlock_mask — битовая маска окон, с которыми core интерлочится (0=без интерлока).
+ */
+void nv_gsp_disp_build_core_update(uint8_t *pb, uint32_t *off, uint32_t wndw_interlock_mask);
+
+/*
+ * 5C.4d: поток методов window-channel (NVC37E) для surface-scanout (порт wndwc37e_image_set).
+ * В pb[*off]: SET_PRESENT_CONTROL, SET_SIZE, SET_STORAGE(PITCH), SET_PARAMS(format,RGB),
+ * SET_PLANAR_STORAGE(pitch>>6), SET_CONTEXT_DMA_ISO=iso_handle, SET_OFFSET(fb_off>>8),
+ * SET_POINT_IN(0), SET_SIZE_IN, SET_SIZE_OUT. БЕЗ UPDATE. format — NVC37E_PARAMS_FORMAT_*.
+ */
+void nv_gsp_disp_build_window_image(uint8_t *pb, uint32_t *off, uint32_t format,
+                                    uint32_t w, uint32_t h, uint32_t pitch,
+                                    uint64_t fb_off, uint32_t iso_handle);
+
+/*
+ * 5C.4d: финальный UPDATE window-channel (порт wndwc37e_update). В pb[*off]:
+ * SET_INTERLOCK_FLAGS=(interlock_with_core?WITH_CORE:0), SET_WINDOW_INTERLOCK_FLAGS=0,
+ * UPDATE=0x1.
+ */
+void nv_gsp_disp_build_window_update(uint8_t *pb, uint32_t *off, int interlock_with_core);
+
+/*
+ * 5C.4d: закодировать 24-байтный дескриптор ctx-dma Volta+ (gv100_dmaobj_bind) в desc[24]
+ * для диапазона VRAM [start..limit] (RDWR). Затем пишется в inst-mem дисплея через PRAMIN.
+ */
+void nv_gsp_disp_build_ctxdma_desc(uint8_t *desc, uint64_t start, uint64_t limit);
+
+/*
+ * 5C.4d: вычислить индекс RAMHT-слота (co) для (chid, handle) и context-слово.
+ * inst_offset — смещение дескриптора ctx-dma в inst-mem (байты). client — RM client handle.
+ * Возврат: *out_slot ← индекс записи (co), *out_context ← context-слово. Порт nvkm_ramht.
+ */
+void nv_gsp_disp_ramht_entry(uint32_t chid, uint32_t handle, uint32_t client,
+                             uint32_t inst_offset, uint32_t *out_slot, uint32_t *out_context);
 
 /* --- 5C.3: SOR acquire (ctrl0073dfp.h) --- */
 #define NV0073_CTRL_CMD_DFP_ASSIGN_SOR   0x731152u

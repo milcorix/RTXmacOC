@@ -91,13 +91,36 @@
   (b ✅ 🟢 HW 2026-07-15) framebuffer во VRAM
   (FB=0x14000000, 1920x1080 BGRA8888, pitch 7680, size 0x7e9000) + заливка 3 полос R/G/B
   через PRAMIN, read-back совпал (R=0x00ff0000 G=0x0000ff00 B=0x000000ff); пруф
-  `docs/hw-dumps/20260715-rtx4070s-layer5-C4b-fb-OK.log`; (c 🔧 framing: EDID DTD-парсер `nv_edid_parse_dtd` + билдер потока
-  core-методов `nv_gsp_disp_build_core_modeset` (SOR_SET_CONTROL/PROCAMP/OUTPUT_RESOURCE/
-  RASTER_SIZE/SYNC_END/BLANK_END/BLANK_START/VIEWPORT_IN/OUT/CONTROL/UPDATE), offline-тест
-  на 1920x1080; **пробел: HEAD_SET_PIXEL_CLOCK ещё не найден** — нужен для HW) core methods (raster/OR/
-  control из EDID-таймингов) + `UPDATE`; (d) window methods (surface) + `UPDATE` →
-  **картинка**. Тайминги — из EDID (прочитан в 5B). Для DP-монитора дополнительно
-  `NV0073_CTRL_CMD_DP_CTRL` (link training).
+  `docs/hw-dumps/20260715-rtx4070s-layer5-C4b-fb-OK.log`; (c ✅ framing ПОЛНЫЙ поток
+  modeset собран, offline-зелёный — см. блок ниже) core+window methods из EDID-таймингов
+  + `UPDATE`; (d) HW-сабмит (PRAMIN+PUT+poll) + ctx-dma/RAMHT → **картинка**. Тайминги —
+  из EDID (прочитан в 5B). Для DP-монитора дополнительно `NV0073_CTRL_CMD_DP_CTRL`.
+
+  **5C.4c ПОЛНЫЙ поток modeset собран (framing, offline-зелёный):** глубокая разведка
+  nouveau dispnv50 (`headc37d_mode`/`_or`/`_view`, `corec37d_init`/`_wndw_owner`/`_update`,
+  `wndwc37e_image_set`/`_update`) + сверка смещений по `clc37d.h`/`clc37e.h` (535.113.01).
+  Билдеры (`driver/gsp/gsp_disp.{c,h}`, тесты `tools/gsp_disp_test.c`):
+  - `build_core_modeset` (15): SOR_SET_CONTROL, PROCAMP(RGB/GRAPHICS), OUTPUT_RESOURCE
+    (24bpp+полярности), RASTER_SIZE/SYNC_END/BLANK_END/BLANK_START/**VERT_BLANK2**,
+    HEAD_SET_CONTROL(progressive), **PIXEL_CLOCK_FREQUENCY=0x200C(+MAX=0x2028, HERTZ=kHz*1000)**,
+    **HEAD_USAGE_BOUNDS=0x2030**, VIEWPORT_POINT_IN/SIZE_IN/SIZE_OUT. (пробел PIXEL_CLOCK закрыт.)
+  - `build_core_init` (33): SET_CONTEXT_DMA_NOTIFIER + 8×(FORMAT_USAGE_BOUNDS 0x1F + ROTATED 0
+    + USAGE_BOUNDS 0x127fff) + 8×WINDOW_SET_CONTROL OWNER=head(i>>1).
+  - `build_core_update`: SET_INTERLOCK_FLAGS(0)+SET_WINDOW_INTERLOCK_FLAGS(mask)+UPDATE(0x1).
+  - `build_window_image` (10 NVC37E): SET_PRESENT_CONTROL, SET_SIZE, SET_STORAGE(PITCH),
+    SET_PARAMS(X8R8G8B8/RGB/BYPASS), SET_PLANAR_STORAGE(pitch>>6), SET_CONTEXT_DMA_ISO,
+    SET_OFFSET(fb>>8), SET_POINT_IN, SET_SIZE_IN/OUT.
+  - `build_window_update`: SET_INTERLOCK_FLAGS(WITH_CORE)+UPDATE(0x1).
+  - `build_ctxdma_desc` (24б Volta+, flags0=0x45 VRAM|RW|PAGE_SP, start/limit>>8) +
+    `ramht_entry` (слот/context RAMHT: chid<<25 | client&0x3fff | inst_off<<9).
+
+  **Механизм сабмита (5C.4d, HW):** методы копятся в пушбуфере во VRAM (core 0x13410000,
+  window 0x13412000) через PRAMIN; PUT в user-регионе BAR0 (core→`0x680000`,
+  window→`0x690000+head*0x1000`, DWORD-единицы) бампаем MMIO; ждём GET==PUT/notifier.
+  ctx-dma NV_DMA_IN_MEMORY: дескриптор в inst-mem дисплея (после RAMHT 0x1000), RAMHT
+  {handle,context} даёт доступ каналу. Core+window интерлочатся (атомарный modeset+flip).
+  **Открытый риск:** точная семантика `inst_offset` в context RAMHT (nvkm node->offset) и
+  chid.user — проверяются на железе.
 
 ---
 

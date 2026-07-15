@@ -341,21 +341,99 @@ static void test_edid_dtd_and_modeset(void)
     uint8_t pb[256]; memset(pb, 0, sizeof(pb)); uint32_t off = 0;
     nv_gsp_disp_build_core_modeset(pb, &off, &t, /*head*/0, /*sor*/0,
                                    NVC37D_SOR_PROTOCOL_SINGLE_TMDS_A);
-    CHECK(off == 11*8, "поток: 11 методов (SOR/PROCAMP/ORES/4×raster/2×viewport/CTRL/UPDATE)");
+    CHECK(off == 15*8, "поток: 15 методов (SOR/PROCAMP/ORES/5×raster/CTRL/2×pclk/usage/3×viewport)");
     /* первый метод — SOR_SET_CONTROL(0) = OWNER head0(1) | TMDS_A<<8 */
     CHECK((ld32(pb+0) & 0x3ffc) == NVC37D_SOR_SET_CONTROL(0), "метод[0] == SOR_SET_CONTROL(0)");
     CHECK(ld32(pb+4) == (1u | (NVC37D_SOR_PROTOCOL_SINGLE_TMDS_A << 8)), "SOR: OWNER head0 | TMDS_A");
-    /* найти RASTER_SIZE в потоке и проверить htotal|vtotal */
-    int found = 0;
+    /* найти RASTER_SIZE, PIXEL_CLOCK, HEAD_USAGE_BOUNDS в потоке */
+    int found_raster = 0, found_pclk = 0, found_usage = 0;
     for (uint32_t o = 0; o < off; o += 8) {
-        if ((ld32(pb+o) & 0x3ffc) == NVC77D_HEAD_SET_RASTER_SIZE(0)) {
+        uint32_t m = ld32(pb+o) & 0x3ffc;
+        if (m == NVC77D_HEAD_SET_RASTER_SIZE(0)) {
             CHECK(ld32(pb+o+4) == ((1920u+280u) | ((1080u+45u) << 16)), "RASTER_SIZE = htotal|vtotal");
-            found = 1;
+            found_raster = 1;
+        }
+        if (m == NVC37D_HEAD_SET_PIXEL_CLOCK_FREQUENCY(0)) {
+            CHECK(ld32(pb+o+4) == 148500u*1000u, "PIXEL_CLOCK HERTZ = 148500000");
+            found_pclk = 1;
+        }
+        if (m == NVC37D_HEAD_SET_HEAD_USAGE_BOUNDS(0)) {
+            CHECK(ld32(pb+o+4) == NVC37D_HEAD_USAGE_BOUNDS_DEFAULT, "HEAD_USAGE_BOUNDS = 0x124");
+            found_usage = 1;
         }
     }
-    CHECK(found, "RASTER_SIZE присутствует в потоке");
-    /* последний метод — UPDATE */
-    CHECK((ld32(pb + off - 8) & 0x3ffc) == NVC37D_UPDATE, "последний метод == UPDATE");
+    CHECK(found_raster && found_pclk && found_usage, "RASTER_SIZE+PIXEL_CLOCK+USAGE_BOUNDS в потоке");
+    CHECK(NVC37D_HEAD_SET_PIXEL_CLOCK_FREQUENCY(0) == 0x200c, "PIXEL_CLOCK(0) == 0x200c");
+    CHECK(NVC37D_HEAD_SET_HEAD_USAGE_BOUNDS(0) == 0x2030, "HEAD_USAGE_BOUNDS(0) == 0x2030");
+}
+
+static void test_core_init_and_update(void)
+{
+    printf("[test_core_init_and_update]\n");
+    uint8_t pb[512]; memset(pb, 0, sizeof(pb)); uint32_t off = 0;
+    nv_gsp_disp_build_core_init(pb, &off, NV_DISP_HANDLE_SYNCBUF);
+    /* 1 (notifier) + 8*3 (window bounds) + 8 (owner) = 33 метода */
+    CHECK(off == 33*8, "core_init: 33 метода");
+    CHECK((ld32(pb+0) & 0x3ffc) == NVC37D_SET_CONTEXT_DMA_NOTIFIER, "метод[0] == SET_CONTEXT_DMA_NOTIFIER");
+    CHECK(ld32(pb+4) == NV_DISP_HANDLE_SYNCBUF, "notifier = SYNCBUF handle");
+    /* последний метод — WINDOW_SET_CONTROL(7) OWNER=head3 */
+    CHECK((ld32(pb+off-8) & 0x3ffc) == NVC37D_WINDOW_SET_CONTROL_OWNER(7), "последний = WINDOW_SET_CONTROL(7)");
+    CHECK(ld32(pb+off-4) == 3u, "OWNER окна7 = head3 (7>>1)");
+
+    off = 0;
+    nv_gsp_disp_build_core_update(pb, &off, 0x1u /*window0*/);
+    CHECK(off == 3*8, "core_update: 3 метода");
+    CHECK((ld32(pb+0) & 0x3ffc) == NVC37D_SET_INTERLOCK_FLAGS, "метод[0] == SET_INTERLOCK_FLAGS");
+    CHECK((ld32(pb+8) & 0x3ffc) == NVC37D_SET_WINDOW_INTERLOCK_FLAGS, "метод[1] == SET_WINDOW_INTERLOCK_FLAGS");
+    CHECK(ld32(pb+12) == 0x1u, "WINDOW_INTERLOCK = window0");
+    CHECK((ld32(pb+16) & 0x3ffc) == NVC37D_UPDATE && ld32(pb+20) == 0x1u, "UPDATE = 0x1");
+}
+
+static void test_window_image_and_update(void)
+{
+    printf("[test_window_image_and_update]\n");
+    uint8_t pb[256]; memset(pb, 0, sizeof(pb)); uint32_t off = 0;
+    nv_gsp_disp_build_window_image(pb, &off, NVC37E_PARAMS_FORMAT_X8R8G8B8,
+                                   1920, 1080, 7680, 0x14000000ull, NV_DISP_HANDLE_VRAM);
+    CHECK(off == 10*8, "window_image: 10 методов");
+    CHECK((ld32(pb+0) & 0x3ffc) == NVC37E_SET_PRESENT_CONTROL, "метод[0] == SET_PRESENT_CONTROL");
+    int f_iso=0, f_off=0, f_pitch=0, f_params=0;
+    for (uint32_t o = 0; o < off; o += 8) {
+        uint32_t m = ld32(pb+o) & 0x3ffc;
+        if (m == NVC37E_SET_CONTEXT_DMA_ISO(0)) { CHECK(ld32(pb+o+4)==NV_DISP_HANDLE_VRAM, "ISO=VRAM handle"); f_iso=1; }
+        if (m == NVC37E_SET_OFFSET(0))          { CHECK(ld32(pb+o+4)==(0x14000000u>>8), "OFFSET=fb>>8"); f_off=1; }
+        if (m == NVC37E_SET_PLANAR_STORAGE(0))  { CHECK(ld32(pb+o+4)==(7680u>>6), "PITCH=pitch>>6=120"); f_pitch=1; }
+        if (m == NVC37E_SET_PARAMS)             { CHECK(ld32(pb+o+4)==0xE6u, "PARAMS FORMAT=X8R8G8B8"); f_params=1; }
+    }
+    CHECK(f_iso && f_off && f_pitch && f_params, "ISO/OFFSET/PITCH/PARAMS в потоке");
+
+    off = 0;
+    nv_gsp_disp_build_window_update(pb, &off, 1 /*interlock core*/);
+    CHECK(off == 3*8, "window_update: 3 метода");
+    CHECK((ld32(pb+0) & 0x3ffc) == NVC37E_SET_INTERLOCK_FLAGS, "метод[0] == SET_INTERLOCK_FLAGS");
+    CHECK(ld32(pb+4) == NVC37E_INTERLOCK_WITH_CORE_BIT, "interlock WITH_CORE");
+    CHECK((ld32(pb+16) & 0x3ffc) == NVC37E_UPDATE && ld32(pb+20) == 0x1u, "UPDATE = 0x1");
+}
+
+static void test_ctxdma_and_ramht(void)
+{
+    printf("[test_ctxdma_and_ramht]\n");
+    uint8_t desc[NV_CTXDMA_DESC_SIZE];
+    /* ctx-dma на весь VRAM: start=0, limit=0x2ffffffff (12 ГиБ-1). */
+    nv_gsp_disp_build_ctxdma_desc(desc, 0, 0x2ffffffffull);
+    CHECK(ld32(desc+0x00) == 0x45u, "flags0 = VRAM|RW|PAGE_SP = 0x45");
+    CHECK(ld32(desc+0x04) == 0u && ld32(desc+0x08) == 0u, "start>>8 = 0");
+    CHECK(ld32(desc+0x0c) == (uint32_t)((0x2ffffffffull>>8)&0xffffffffu), "limit>>8 lo");
+    CHECK(ld32(desc+0x10) == (uint32_t)((0x2ffffffffull>>8)>>32), "limit>>8 hi");
+
+    uint32_t slot, ctx;
+    nv_gsp_disp_ramht_entry(NV_DISP_CHID_CORE, NV_DISP_HANDLE_SYNCBUF, 0xc1d00001u, 0x1000u, &slot, &ctx);
+    CHECK(slot < NV_DISP_RAMHT_SIZE, "slot в пределах RAMHT");
+    /* context: chid(0)<<25 | (client&0x3fff) | (inst_off<<9) */
+    CHECK(ctx == ((0xc1d00001u & 0x3fffu) | (0x1000u << 9)), "context core = client|inst<<9");
+    uint32_t slot_w, ctx_w;
+    nv_gsp_disp_ramht_entry(NV_DISP_CHID_WINDOW(0), NV_DISP_HANDLE_VRAM, 0xc1d00001u, 0x1020u, &slot_w, &ctx_w);
+    CHECK(ctx_w == ((1u<<25) | (0xc1d00001u & 0x3fffu) | (0x1020u << 9)), "context window0 = chid1<<25|...");
 }
 
 int main(void)
@@ -373,6 +451,9 @@ int main(void)
     test_assign_sor();
     test_disp_push_method();
     test_edid_dtd_and_modeset();
+    test_core_init_and_update();
+    test_window_image_and_update();
+    test_ctxdma_and_ramht();
     printf(failed ? "\n=== gsp_disp_test: ЕСТЬ ПРОВАЛЫ ===\n" : "\n=== gsp_disp_test: ВСЕ ТЕСТЫ ПРОШЛИ ===\n");
     return failed ? 1 : 0;
 }

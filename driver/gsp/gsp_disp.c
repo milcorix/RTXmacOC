@@ -245,33 +245,129 @@ void nv_gsp_disp_build_core_modeset(uint8_t *pb, uint32_t *off, const nv_edid_ti
     if (!pb || !off || !t) return;
     uint32_t htotal = t->hact + t->hblank;
     uint32_t vtotal = t->vact + t->vblank;
-    /* Координаты raster (nvd): sync_end = ширина sync-1; blank_end = sync+back_porch-1
-       = hblank - hsync_off - 1; blank_start = blank_end + active. */
+    /* Координаты raster (nv50_head_atomic_check_mode): active=total; sync_end=sync_w-1;
+       blank_end = hblank - hsync_off - 1; blank_start = blank_end + active. */
     uint32_t hbe = t->hblank - t->hsync_off - 1u;
     uint32_t vbe = t->vblank - t->vsync_off - 1u;
     uint32_t hbs = hbe + t->hact;
     uint32_t vbs = vbe + t->vact;
+    uint32_t hertz = t->pclk_khz * 1000u;   /* HERTZ[30:0] */
 
     /* SOR: владелец = head, протокол (TMDS/DP). */
     nv_gsp_disp_push_method(pb, off, NVC37D_SOR_SET_CONTROL(sor),
                             (1u << head) | (protocol << 8));
-    /* head: RGB procamp; output resource: полярности + 24bpp. */
-    nv_gsp_disp_push_method(pb, off, NVC37D_HEAD_SET_PROCAMP(head), 0u);
+    /* head: RGB procamp (headc37d_procamp: COLOR_SPACE RGB, BLACK_LEVEL GRAPHICS[31:30]=2). */
+    nv_gsp_disp_push_method(pb, off, NVC37D_HEAD_SET_PROCAMP(head), (2u << 30));
+    /* output resource: полярности sync (NEGATIVE_TRUE=1 если не positive) + 24bpp. */
     uint32_t ores = (NVC37D_ORESOURCE_PIXEL_DEPTH_BPP_24_444 << 4)
-                  | (t->hsync_pos ? 0u : (1u << 2))    /* NEGATIVE_TRUE=1 если не positive */
+                  | (t->hsync_pos ? 0u : (1u << 2))
                   | (t->vsync_pos ? 0u : (1u << 3));
     nv_gsp_disp_push_method(pb, off, NVC37D_HEAD_SET_CONTROL_OUTPUT_RESOURCE(head), ores);
-    /* raster. */
+    /* raster (headc37d_mode). */
     nv_gsp_disp_push_method(pb, off, NVC77D_HEAD_SET_RASTER_SIZE(head), htotal | (vtotal << 16));
     nv_gsp_disp_push_method(pb, off, NVC37D_HEAD_SET_RASTER_SYNC_END(head),
                             (t->hsync_w - 1u) | ((t->vsync_w - 1u) << 16));
     nv_gsp_disp_push_method(pb, off, NVC37D_HEAD_SET_RASTER_BLANK_END(head),  hbe | (vbe << 16));
     nv_gsp_disp_push_method(pb, off, NVC37D_HEAD_SET_RASTER_BLANK_START(head), hbs | (vbs << 16));
-    /* viewport = активная область. */
+    /* vert blank2 (progressive: blank2e=0, blank2s=1). */
+    nv_gsp_disp_push_method(pb, off, NVC37D_HEAD_SET_RASTER_VERT_BLANK2(head), 0u | (0u << 16) | 1u);
+    /* head control: progressive (interlace=0). */
+    nv_gsp_disp_push_method(pb, off, NVC37D_HEAD_SET_CONTROL_METH(head), NVC37D_HEAD_CONTROL_PROGRESSIVE);
+    /* пиксельклок (headc37d_mode: FREQUENCY и _MAX = clock*1000 Гц). */
+    nv_gsp_disp_push_method(pb, off, NVC37D_HEAD_SET_PIXEL_CLOCK_FREQUENCY(head),     hertz & 0x7fffffffu);
+    nv_gsp_disp_push_method(pb, off, NVC37D_HEAD_SET_PIXEL_CLOCK_FREQUENCY_MAX(head), hertz & 0x7fffffffu);
+    /* head usage bounds (cursor W256, LUT 1025, upscaling). */
+    nv_gsp_disp_push_method(pb, off, NVC37D_HEAD_SET_HEAD_USAGE_BOUNDS(head), NVC37D_HEAD_USAGE_BOUNDS_DEFAULT);
+    /* viewport = активная область (headc37d_view: point_in=0, size_in/out=active). */
+    nv_gsp_disp_push_method(pb, off, NVC37D_HEAD_SET_VIEWPORT_POINT_IN(head), 0u);
     nv_gsp_disp_push_method(pb, off, NVC37D_HEAD_SET_VIEWPORT_SIZE_IN(head),  t->hact | (t->vact << 16));
     nv_gsp_disp_push_method(pb, off, NVC37D_HEAD_SET_VIEWPORT_SIZE_OUT(head), t->hact | (t->vact << 16));
-    /* head control: progressive. */
-    nv_gsp_disp_push_method(pb, off, NVC37D_HEAD_SET_CONTROL_METH(head), 0u);
-    /* применить. */
-    nv_gsp_disp_push_method(pb, off, NVC37D_UPDATE, 0u);
+}
+
+void nv_gsp_disp_build_core_init(uint8_t *pb, uint32_t *off, uint32_t notifier_handle)
+{
+    if (!pb || !off) return;
+    /* SET_CONTEXT_DMA_NOTIFIER = handle sync-ctxdma. */
+    nv_gsp_disp_push_method(pb, off, NVC37D_SET_CONTEXT_DMA_NOTIFIER, notifier_handle);
+    /* Для всех 8 окон: разрешённые форматы/границы (corec37d_init). */
+    for (uint32_t i = 0; i < 8u; i++) {
+        nv_gsp_disp_push_method(pb, off, NVC37D_WINDOW_SET_WINDOW_FORMAT_USAGE_BOUNDS(i),
+                                NVC37D_WIN_FORMAT_USAGE_DEFAULT);
+        nv_gsp_disp_push_method(pb, off, NVC37D_WINDOW_SET_WINDOW_ROTATED_FORMAT_USAGE_BOUNDS(i), 0u);
+        nv_gsp_disp_push_method(pb, off, NVC37D_WINDOW_SET_WINDOW_USAGE_BOUNDS(i),
+                                NVC37D_WIN_USAGE_BOUNDS_DEFAULT);
+    }
+    /* Владелец окна i → head(i>>1) (corec37d_wndw_owner). */
+    for (uint32_t i = 0; i < 8u; i++)
+        nv_gsp_disp_push_method(pb, off, NVC37D_WINDOW_SET_CONTROL_OWNER(i), (i >> 1));
+}
+
+void nv_gsp_disp_build_core_update(uint8_t *pb, uint32_t *off, uint32_t wndw_interlock_mask)
+{
+    if (!pb || !off) return;
+    nv_gsp_disp_push_method(pb, off, NVC37D_SET_INTERLOCK_FLAGS, 0u);              /* без cursor */
+    nv_gsp_disp_push_method(pb, off, NVC37D_SET_WINDOW_INTERLOCK_FLAGS, wndw_interlock_mask);
+    nv_gsp_disp_push_method(pb, off, NVC37D_UPDATE, NVC37D_UPDATE_DATA);
+}
+
+void nv_gsp_disp_build_window_image(uint8_t *pb, uint32_t *off, uint32_t format,
+                                    uint32_t w, uint32_t h, uint32_t pitch,
+                                    uint64_t fb_off, uint32_t iso_handle)
+{
+    if (!pb || !off) return;
+    /* SET_PRESENT_CONTROL: MIN_PRESENT_INTERVAL=0, BEGIN_MODE NON_TEARING=0. */
+    nv_gsp_disp_push_method(pb, off, NVC37E_SET_PRESENT_CONTROL, 0u);
+    nv_gsp_disp_push_method(pb, off, NVC37E_SET_SIZE, (w & 0xffffu) | ((h & 0xffffu) << 16));
+    /* линейный (pitch) layout, block_height=0. */
+    nv_gsp_disp_push_method(pb, off, NVC37E_SET_STORAGE, NVC37E_STORAGE_MEMORY_LAYOUT_PITCH);
+    /* FORMAT | COLOR_SPACE RGB(0) | INPUT_RANGE BYPASS(0). */
+    nv_gsp_disp_push_method(pb, off, NVC37E_SET_PARAMS, (format & 0xffu));
+    /* PLANAR_STORAGE pitch в единицах 64б (>>6). */
+    nv_gsp_disp_push_method(pb, off, NVC37E_SET_PLANAR_STORAGE(0), (pitch >> 6) & 0x1fffu);
+    /* ISO ctx-dma (framebuffer) + offset (>>8). */
+    nv_gsp_disp_push_method(pb, off, NVC37E_SET_CONTEXT_DMA_ISO(0), iso_handle);
+    nv_gsp_disp_push_method(pb, off, NVC37E_SET_OFFSET(0), (uint32_t)(fb_off >> 8));
+    /* вход = вся поверхность. */
+    nv_gsp_disp_push_method(pb, off, NVC37E_SET_POINT_IN(0), 0u);
+    nv_gsp_disp_push_method(pb, off, NVC37E_SET_SIZE_IN,  (w & 0x7fffu) | ((h & 0x7fffu) << 16));
+    nv_gsp_disp_push_method(pb, off, NVC37E_SET_SIZE_OUT, (w & 0x7fffu) | ((h & 0x7fffu) << 16));
+}
+
+void nv_gsp_disp_build_window_update(uint8_t *pb, uint32_t *off, int interlock_with_core)
+{
+    if (!pb || !off) return;
+    nv_gsp_disp_push_method(pb, off, NVC37E_SET_INTERLOCK_FLAGS,
+                            interlock_with_core ? NVC37E_INTERLOCK_WITH_CORE_BIT : 0u);
+    nv_gsp_disp_push_method(pb, off, NVC37E_SET_WINDOW_INTERLOCK_FLAGS, 0u);
+    nv_gsp_disp_push_method(pb, off, NVC37E_UPDATE, NVC37D_UPDATE_DATA);
+}
+
+void nv_gsp_disp_build_ctxdma_desc(uint8_t *desc, uint64_t start, uint64_t limit)
+{
+    if (!desc) return;
+    for (unsigned i = 0; i < NV_CTXDMA_DESC_SIZE; i++) desc[i] = 0;
+    uint64_t s = start >> 8, l = limit >> 8;
+    st32(desc + 0x00, NV_CTXDMA_FLAGS0_VRAM_RW);
+    st32(desc + 0x04, (uint32_t)(s & 0xffffffffu));
+    st32(desc + 0x08, (uint32_t)(s >> 32));
+    st32(desc + 0x0c, (uint32_t)(l & 0xffffffffu));
+    st32(desc + 0x10, (uint32_t)(l >> 32));
+}
+
+/* Хэш RAMHT (nvkm_ramht_hash): XOR handle по bits, затем ^ chid<<(bits-4). */
+static uint32_t nv_disp_ramht_hash(uint32_t chid, uint32_t handle)
+{
+    uint32_t hash = 0;
+    uint32_t mask = (1u << NV_DISP_RAMHT_BITS) - 1u;
+    while (handle) { hash ^= (handle & mask); handle >>= NV_DISP_RAMHT_BITS; }
+    hash ^= chid << (NV_DISP_RAMHT_BITS - 4u);
+    return hash % NV_DISP_RAMHT_SIZE;
+}
+
+void nv_gsp_disp_ramht_entry(uint32_t chid, uint32_t handle, uint32_t client,
+                             uint32_t inst_offset, uint32_t *out_slot, uint32_t *out_context)
+{
+    /* context = chid<<25 | (client & 0x3fff) | (inst_offset << 9) (r535_dmac_bind + addr=-9). */
+    if (out_slot)    *out_slot    = nv_disp_ramht_hash(chid, handle);
+    if (out_context) *out_context = (chid << 25) | (client & 0x3fffu) | (inst_offset << 9);
 }
