@@ -268,6 +268,12 @@ void nv_gsp_disp_ramht_entry(uint32_t chid, uint32_t handle, uint32_t client,
 /* --- Контролы NV0073 SYSTEM (ctrl0073system.h) --- */
 #define NV0073_CTRL_CMD_SYSTEM_GET_NUM_HEADS  0x730102u
 #define NV0073_CTRL_CMD_SYSTEM_GET_SUPPORTED  0x730120u
+#define NV0073_CTRL_CMD_SYSTEM_GET_ACTIVE     0x730126u
+/* NV0073_CTRL_SYSTEM_GET_ACTIVE_PARAMS (16б): subDeviceInstance@0 head@4 flags@8 displayId@12(OUT). */
+#define NV0073_GET_ACTIVE_PARAMS_SIZE   16u
+#define NV0073_GET_ACTIVE_HEAD_OFF       4u
+#define NV0073_GET_ACTIVE_FLAGS_OFF      8u
+#define NV0073_GET_ACTIVE_DISPLAYID_OFF 12u
 /* NV0073_CTRL_SYSTEM_GET_NUM_HEADS_PARAMS (12б): subDeviceInstance@0 flags@4 numHeads@8. */
 #define NV0073_NUM_HEADS_PARAMS_SIZE   12u
 #define NV0073_NUM_HEADS_SUBDEV_OFF     0u
@@ -322,6 +328,11 @@ void nv_gsp_disp_ramht_entry(uint32_t chid, uint32_t handle, uint32_t client,
  */
 int nv_gsp_disp_common_alloc(nv_gsp_rpc_chan *ch, uint32_t hClient, uint32_t hDevice,
                              uint32_t *out_disp, uint32_t *status);
+
+/* Диагностика: displayId, который GSP считает АКТИВНЫМ на head (GET_ACTIVE). 0 = голова
+   не активна (супервизор GSP не поднял modeset). Порт r535_disp_head_displayid. */
+int nv_gsp_disp_get_active(nv_gsp_rpc_chan *ch, uint32_t hClient, uint32_t hDispCommon,
+                           uint32_t head, uint32_t *out_display_id, uint32_t *status);
 
 /* 5A шаг 2: число heads (SYSTEM_GET_NUM_HEADS) на объекте hDispCommon. */
 int nv_gsp_disp_get_num_heads(nv_gsp_rpc_chan *ch, uint32_t hClient, uint32_t hDispCommon,

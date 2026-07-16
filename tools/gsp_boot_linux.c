@@ -1088,6 +1088,15 @@ static int run(const nv_mmio_t *io, struct arena *ar, const char *bdf)
                                         printf("СЛОЙ 5 C.4e ДИАГ: SUPERVISOR 0x611c30=0x%x (pending&0x7=0x%x %s); exc_other 0x611854=0x%x; head0 vline 0x%x->0x%x %s\n",
                                                sv, sv & 0x7u, (sv & 0x7u) ? "SV ВИСИТ (никто не обслужил!)" : "нет SV",
                                                exo, vl0, vl1, (vl1 != vl0) ? "СКАНИРУЕТ" : "не сканирует");
+                                        /* GET_ACTIVE: какой displayId GSP считает активным на head0.
+                                           !=0 → супервизор GSP принял наш modeset (голова живая по мнению GSP).
+                                           ==0 → GSP не поднял голову (modeset не принят его modeset-путём). */
+                                        uint32_t act = 0xdead, ast2 = 0xffffffffu;
+                                        int arc2 = nv_gsp_disp_get_active(&ch, hcli, hdisp, head, &act, &ast2);
+                                        printf("СЛОЙ 5 C.4e ДИАГ: GET_ACTIVE head0 rc=%d status=0x%x activeDisplayId=0x%x %s\n",
+                                               arc2, ast2, act,
+                                               (arc2==NV_GSP_RM_OK && ast2==0 && act!=0) ? "GSP СЧИТАЕТ ГОЛОВУ АКТИВНОЙ"
+                                                                                         : "GSP: голова НЕ активна");
                                     }
 
                                     /* Дать монитору просинхронизироваться + показать кадр (видно на HDMI). */

@@ -20,6 +20,22 @@ int nv_gsp_disp_common_alloc(nv_gsp_rpc_chan *ch, uint32_t hClient, uint32_t hDe
     return rc;
 }
 
+int nv_gsp_disp_get_active(nv_gsp_rpc_chan *ch, uint32_t hClient, uint32_t hDispCommon,
+                           uint32_t head, uint32_t *out_display_id, uint32_t *status)
+{
+    if (!ch) return NV_GSP_RM_ERR_ARG;
+    uint8_t p[NV0073_GET_ACTIVE_PARAMS_SIZE];
+    for (unsigned i = 0; i < sizeof(p); i++) p[i] = 0;
+    st32(p + NV0073_GET_ACTIVE_HEAD_OFF, head);
+    uint32_t st = 0xffffffffu;
+    int rc = nv_gsp_rm_control(ch, hClient, hDispCommon, NV0073_CTRL_CMD_SYSTEM_GET_ACTIVE,
+                               p, sizeof(p), &st);
+    if (status) *status = st;
+    if (rc != NV_GSP_RM_OK) return rc;
+    if (out_display_id) *out_display_id = ld32(p + NV0073_GET_ACTIVE_DISPLAYID_OFF);
+    return NV_GSP_RM_OK;
+}
+
 int nv_gsp_disp_get_num_heads(nv_gsp_rpc_chan *ch, uint32_t hClient, uint32_t hDispCommon,
                               uint32_t *out_num_heads, uint32_t *status)
 {
