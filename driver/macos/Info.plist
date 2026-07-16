@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleIdentifier</key>
+    <string>dev.milcorix.MilcorixFB</string>
+    <key>CFBundleName</key>
+    <string>MilcorixFB</string>
+    <key>CFBundleVersion</key>
+    <string>1.0.0</string>
+    <key>CFBundleShortVersionString</key>
+    <string>1.0.0</string>
+    <key>CFBundlePackageType</key>
+    <string>KEXT</string>
+    <key>OSBundleRequired</key>
+    <string>Local-Root</string>
+    <key>IOKitPersonalities</key>
+    <dict>
+        <key>MilcorixFB</key>
+        <dict>
+            <key>CFBundleIdentifier</key>
+            <string>dev.milcorix.MilcorixFB</string>
+            <key>IOClass</key>
+            <string>MilcorixFB</string>
+            <key>IOProviderClass</key>
+            <string>IOPCIDevice</string>
+            <!-- RTX 4070 Super, Ada AD104: vendor 0x10DE, device 0x2783 -->
+            <key>IOPCIMatch</key>
+            <string>0x278310de</string>
+        </dict>
+    </dict>
+    <key>OSBundleLibraries</key>
+    <dict>
+        <key>com.apple.iokit.IOPCIFamily</key>
+        <string>1.0</string>
+        <key>com.apple.iokit.IOGraphicsFamily</key>
+        <string>1.0</string>
+        <key>com.apple.kpi.iokit</key>
+        <string>8.0</string>
+        <key>com.apple.kpi.libkern</key>
+        <string>8.0</string>
+    </dict>
+</dict>
+</plist>
