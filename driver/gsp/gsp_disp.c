@@ -272,7 +272,8 @@ void nv_gsp_disp_build_core_modeset(uint8_t *pb, uint32_t *off, const nv_edid_ti
     nv_gsp_disp_push_method(pb, off, NVC37D_HEAD_SET_CONTROL_METH(head), NVC37D_HEAD_CONTROL_PROGRESSIVE);
     nv_gsp_disp_push_method(pb, off, NVC37D_HEAD_SET_PIXEL_CLOCK_FREQUENCY(head),     hertz & 0x7fffffffu);
     nv_gsp_disp_push_method(pb, off, NVC37D_HEAD_SET_PIXEL_CLOCK_FREQUENCY_MAX(head), hertz & 0x7fffffffu);
-    nv_gsp_disp_push_method(pb, off, NVC37D_HEAD_SET_HEAD_USAGE_BOUNDS(head), NVC37D_HEAD_USAGE_BOUNDS_DEFAULT);
+    /* HEAD_USAGE_BOUNDS убран: отвергается INVALID_ARG при любом значении (прогоны #6/#7),
+       nouveau сам помечает его "doesn't belong here". Требует output-LUT/cursor ctx-dma. */
 
     /* --- procamp: RGB (headc37d_procamp: BLACK_LEVEL GRAPHICS[31:30]=2). --- */
     nv_gsp_disp_push_method(pb, off, NVC37D_HEAD_SET_PROCAMP(head), (2u << 30));
