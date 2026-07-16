@@ -954,12 +954,11 @@ static int run(const nv_mmio_t *io, struct arena *ar, const char *bdf)
                                     uint64_t fb2 = 0x14000000ull;
                                     uint32_t w = mt.hact, h = mt.vact, pit = w * 4u;
 
-                                    /* 1) FB под нативное разрешение (из EDID) — R/G/B полосы (X8R8G8B8). */
+                                    /* 1) FB под нативное разрешение (из EDID) — сплошной БЕЛЫЙ
+                                       (X8R8G8B8 0x00ffffff): на чёрном "нет сигнала" белый экран
+                                       = однозначно наши пиксели. */
                                     uint64_t fbsz = (uint64_t)pit * h;
-                                    uint32_t bnd = h / 3u; uint64_t bb = (uint64_t)pit * bnd;
-                                    nv_pramin_fill(io, &win, fb2 + 0*bb, (uint32_t)bb, 0x00ff0000u);
-                                    nv_pramin_fill(io, &win, fb2 + 1*bb, (uint32_t)bb, 0x0000ff00u);
-                                    nv_pramin_fill(io, &win, fb2 + 2*bb, (uint32_t)(fbsz - 2*bb), 0x000000ffu);
+                                    nv_pramin_fill(io, &win, fb2, (uint32_t)fbsz, 0x00ffffffu);
 
                                     /* 2) ctx-dma NV_DMA_IN_MEMORY (весь VRAM, RDWR) — 24б дескриптор в
                                        inst-mem дисплея @disp_inst+0x1000 (после RAMHT). */
@@ -1041,7 +1040,7 @@ static int run(const nv_mmio_t *io, struct arena *ar, const char *bdf)
                                            coff, cget, cdone ? "GET==PUT" : "GET!=PUT",
                                            w, h, pit, woff, woff, wget, wdone ? "GET==PUT" : "GET!=PUT");
                                     if (cdone && wdone)
-                                        printf("СЛОЙ 5 C.4e: ★ INTERLOCKED MODESET+FLIP (оба GET==PUT) — ПИКСЕЛИ НА МОНИТОРЕ ★\n");
+                                        printf("СЛОЙ 5 C.4e: ★ INTERLOCKED MODESET+FLIP (оба GET==PUT) — БЕЛЫЙ ЭКРАН НА МОНИТОРЕ ★\n");
                                     l5_scanout_ok = (cdone && wdone);
 
                                     /* Дать монитору просинхронизироваться + показать кадр (видно на HDMI). */
