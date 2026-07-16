@@ -1047,6 +1047,29 @@ static int run(const nv_mmio_t *io, struct arena *ar, const char *bdf)
                                         printf("СЛОЙ 5 C.4e: ★ INTERLOCKED MODESET+FLIP (оба GET==PUT) — БЕЛЫЙ ЭКРАН НА МОНИТОРЕ ★\n");
                                     l5_scanout_ok = (cdone && wdone);
 
+                                    /* --- ДИАГНОСТИКА дисплея (gv100_disp): исключения каналов + супервизор ---
+                                       Исключение канала chid: stat@0x611020+chid*12 (type[14:12], mthd[11:0]<<2),
+                                       data@+4, code@+8. Core chid=0, window chid=1. Супервизор: 0x611c30 (&0x7 =
+                                       pending SV1/2/3 — power-seq OR/PLL/head; если висит — его никто не обслужил).
+                                       Голова: vline@0x616330, hline@0x616334 (растёт = скан идёт). exc_other 0x611854. */
+                                    {
+                                        uint32_t ec = io->rd(io->ctx, 0x611020 + 0*12);
+                                        uint32_t ecd = io->rd(io->ctx, 0x611024 + 0*12);
+                                        uint32_t ecc = io->rd(io->ctx, 0x611028 + 0*12);
+                                        uint32_t ew = io->rd(io->ctx, 0x611020 + 1*12);
+                                        uint32_t ewd = io->rd(io->ctx, 0x611024 + 1*12);
+                                        uint32_t sv = io->rd(io->ctx, 0x611c30);
+                                        uint32_t exo = io->rd(io->ctx, 0x611854);
+                                        uint32_t vl0 = io->rd(io->ctx, 0x616330);
+                                        bar_udelay(NULL, 20000);
+                                        uint32_t vl1 = io->rd(io->ctx, 0x616330);
+                                        printf("СЛОЙ 5 C.4e ДИАГ: core-exc stat=0x%x (type=%u mthd=0x%x) data=0x%x code=0x%x; win-exc stat=0x%x data=0x%x\n",
+                                               ec, (ec>>12)&0x7, (ec&0xfff)<<2, ecd, ecc, ew, ewd);
+                                        printf("СЛОЙ 5 C.4e ДИАГ: SUPERVISOR 0x611c30=0x%x (pending&0x7=0x%x %s); exc_other 0x611854=0x%x; head0 vline 0x%x->0x%x %s\n",
+                                               sv, sv & 0x7u, (sv & 0x7u) ? "SV ВИСИТ (никто не обслужил!)" : "нет SV",
+                                               exo, vl0, vl1, (vl1 != vl0) ? "СКАНИРУЕТ" : "не сканирует");
+                                    }
+
                                     /* Дать монитору просинхронизироваться + показать кадр (видно на HDMI). */
                                     bar_udelay(NULL, 5000000);
                                 }
