@@ -1088,9 +1088,26 @@ static int run(const nv_mmio_t *io, struct arena *ar, const char *bdf)
                                         printf("СЛОЙ 5 C.4e ДИАГ: SUPERVISOR 0x611c30=0x%x (pending&0x7=0x%x %s); exc_other 0x611854=0x%x; head0 vline 0x%x->0x%x %s\n",
                                                sv, sv & 0x7u, (sv & 0x7u) ? "SV ВИСИТ (никто не обслужил!)" : "нет SV",
                                                exo, vl0, vl1, (vl1 != vl0) ? "СКАНИРУЕТ" : "не сканирует");
-                                        /* GET_ACTIVE: какой displayId GSP считает активным на head0.
-                                           !=0 → супервизор GSP принял наш modeset (голова живая по мнению GSP).
-                                           ==0 → GSP не поднял голову (modeset не принят его modeset-путём). */
+                                        /* Состояние SOR прямо из BAR0 (gv100_sor_state): ASY (assembly,
+                                           заданное методами) @0x680300+sor*0x20; ARM (закоммиченное
+                                           супервизором) @0x688300+sor*0x20. Поля: proto_evo[11:8]
+                                           (1=TMDS_A,8/9=DP), owner_head[7:0]. Если ARM показывает наш
+                                           proto+head → супервизор GSP ДОВЁЛ OR до активного (голова должна
+                                           сканировать). Если ASY есть, а ARM пуст → UPDATE/супервизор не
+                                           закоммитил. */
+                                        uint32_t sorc = md_sor & 0x3u;
+                                        uint32_t sor_asy = io->rd(io->ctx, 0x680300u + sorc*0x20u);
+                                        uint32_t sor_arm = io->rd(io->ctx, 0x688300u + sorc*0x20u);
+                                        printf("СЛОЙ 5 C.4e ДИАГ: SOR%u ASY=0x%x (proto=%u ownerHead=0x%x) ARM=0x%x (proto=%u ownerHead=0x%x) %s\n",
+                                               sorc, sor_asy, (sor_asy>>8)&0xf, sor_asy&0xff,
+                                               sor_arm, (sor_arm>>8)&0xf, sor_arm&0xff,
+                                               ((sor_arm & 0xff) || ((sor_arm>>8)&0xf)) ? "OR АКТИВЕН (супервизор закоммитил)"
+                                                                                        : "OR НЕ активен (ARM пуст)");
+                                        /* head0 armed raster (0x616330 vline уже читали); дополнительно
+                                           control-state головы: 0x616300 (owner/status). */
+                                        uint32_t hctl = io->rd(io->ctx, 0x616300u);
+                                        printf("СЛОЙ 5 C.4e ДИАГ: head0 ctl 0x616300=0x%x\n", hctl);
+                                        /* GET_ACTIVE (RPC): какой displayId GSP считает активным на head0. */
                                         uint32_t act = 0xdead, ast2 = 0xffffffffu;
                                         int arc2 = nv_gsp_disp_get_active(&ch, hcli, hdisp, head, &act, &ast2);
                                         printf("СЛОЙ 5 C.4e ДИАГ: GET_ACTIVE head0 rc=%d status=0x%x activeDisplayId=0x%x %s\n",
