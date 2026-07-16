@@ -254,32 +254,34 @@ void nv_gsp_disp_build_core_modeset(uint8_t *pb, uint32_t *off, const nv_edid_ti
     uint32_t hertz = t->pclk_khz * 1000u;   /* HERTZ[30:0] */
 
     (void)sor; (void)protocol;   /* SOR привязывается отдельной фазой (build_core_sor) */
-    /* head: RGB procamp (headc37d_procamp: COLOR_SPACE RGB, BLACK_LEVEL GRAPHICS[31:30]=2). */
-    nv_gsp_disp_push_method(pb, off, NVC37D_HEAD_SET_PROCAMP(head), (2u << 30));
-    /* output resource: полярности sync (NEGATIVE_TRUE=1 если не positive) + 24bpp. */
-    uint32_t ores = (NVC37D_ORESOURCE_PIXEL_DEPTH_BPP_24_444 << 4)
-                  | (t->hsync_pos ? 0u : (1u << 2))
-                  | (t->vsync_pos ? 0u : (1u << 3));
-    nv_gsp_disp_push_method(pb, off, NVC37D_HEAD_SET_CONTROL_OUTPUT_RESOURCE(head), ores);
-    /* raster (headc37d_mode). */
+    /* ПОРЯДОК как nv50_head_flush_set: view → mode → procamp → OR. OUTPUT_RESOURCE
+       валидируется против режима головы, поэтому raster/viewport ДО него (иначе INVALID_ARG). */
+
+    /* --- view: viewport = активная область (headc37d_view). --- */
+    nv_gsp_disp_push_method(pb, off, NVC37D_HEAD_SET_VIEWPORT_POINT_IN(head), 0u);
+    nv_gsp_disp_push_method(pb, off, NVC37D_HEAD_SET_VIEWPORT_SIZE_IN(head),  t->hact | (t->vact << 16));
+    nv_gsp_disp_push_method(pb, off, NVC37D_HEAD_SET_VIEWPORT_SIZE_OUT(head), t->hact | (t->vact << 16));
+
+    /* --- mode: raster + pixel clock + usage bounds (headc37d_mode). --- */
     nv_gsp_disp_push_method(pb, off, NVC77D_HEAD_SET_RASTER_SIZE(head), htotal | (vtotal << 16));
     nv_gsp_disp_push_method(pb, off, NVC37D_HEAD_SET_RASTER_SYNC_END(head),
                             (t->hsync_w - 1u) | ((t->vsync_w - 1u) << 16));
     nv_gsp_disp_push_method(pb, off, NVC37D_HEAD_SET_RASTER_BLANK_END(head),  hbe | (vbe << 16));
     nv_gsp_disp_push_method(pb, off, NVC37D_HEAD_SET_RASTER_BLANK_START(head), hbs | (vbs << 16));
-    /* vert blank2 (progressive: blank2e=0, blank2s=1). */
     nv_gsp_disp_push_method(pb, off, NVC37D_HEAD_SET_RASTER_VERT_BLANK2(head), 0u | (0u << 16) | 1u);
-    /* head control: progressive (interlace=0). */
     nv_gsp_disp_push_method(pb, off, NVC37D_HEAD_SET_CONTROL_METH(head), NVC37D_HEAD_CONTROL_PROGRESSIVE);
-    /* пиксельклок (headc37d_mode: FREQUENCY и _MAX = clock*1000 Гц). */
     nv_gsp_disp_push_method(pb, off, NVC37D_HEAD_SET_PIXEL_CLOCK_FREQUENCY(head),     hertz & 0x7fffffffu);
     nv_gsp_disp_push_method(pb, off, NVC37D_HEAD_SET_PIXEL_CLOCK_FREQUENCY_MAX(head), hertz & 0x7fffffffu);
-    /* head usage bounds (cursor W256, LUT 1025, upscaling). */
     nv_gsp_disp_push_method(pb, off, NVC37D_HEAD_SET_HEAD_USAGE_BOUNDS(head), NVC37D_HEAD_USAGE_BOUNDS_DEFAULT);
-    /* viewport = активная область (headc37d_view: point_in=0, size_in/out=active). */
-    nv_gsp_disp_push_method(pb, off, NVC37D_HEAD_SET_VIEWPORT_POINT_IN(head), 0u);
-    nv_gsp_disp_push_method(pb, off, NVC37D_HEAD_SET_VIEWPORT_SIZE_IN(head),  t->hact | (t->vact << 16));
-    nv_gsp_disp_push_method(pb, off, NVC37D_HEAD_SET_VIEWPORT_SIZE_OUT(head), t->hact | (t->vact << 16));
+
+    /* --- procamp: RGB (headc37d_procamp: BLACK_LEVEL GRAPHICS[31:30]=2). --- */
+    nv_gsp_disp_push_method(pb, off, NVC37D_HEAD_SET_PROCAMP(head), (2u << 30));
+
+    /* --- or: output resource — полярности sync (NEGATIVE_TRUE=1 если не positive) + 24bpp. ПОСЛЕДНИМ. --- */
+    uint32_t ores = (NVC37D_ORESOURCE_PIXEL_DEPTH_BPP_24_444 << 4)
+                  | (t->hsync_pos ? 0u : (1u << 2))
+                  | (t->vsync_pos ? 0u : (1u << 3));
+    nv_gsp_disp_push_method(pb, off, NVC37D_HEAD_SET_CONTROL_OUTPUT_RESOURCE(head), ores);
 }
 
 void nv_gsp_disp_build_core_sor(uint8_t *pb, uint32_t *off, uint32_t sor,
