@@ -984,14 +984,36 @@ static int run(const nv_mmio_t *io, struct arena *ar, const char *bdf)
                                            rslot, (unsigned long long)ent_phys, rctx,
                                            nv_pramin_rd32(io,&win,ent_phys+0), nv_pramin_rd32(io,&win,ent_phys+4));
 
-                                    /* 4) Поток core: init(notifier=0) + modeset + update(INTERLOCK окно0).
-                                          Поток window: image + update(INTERLOCK core). Атомарный modeset+flip
-                                          — core UPDATE ждёт window0, window UPDATE ждёт core (как nouveau). */
+                                    uint32_t core_user = NVC77D_CORE_USER_BASE;                 /* 0x680000 */
+                                    uint32_t win_user  = NVC37E_WINDOW_USER_BASE + head*0x1000u;/* 0x690000 */
                                     static uint8_t cs[1024]; uint32_t coff = 0;
+
+                                    /* --- ФАЗА 1: core init + update (назначить окно голове, assign_windows).
+                                       В nouveau corec37d_init — ОТДЕЛЬНЫЙ PUSH_KICK ДО modeset. interlock=0. */
                                     nv_gsp_disp_build_core_init(cs, &coff, 0u /*notifier disabled*/);
+                                    nv_gsp_disp_build_core_update(cs, &coff, 0u);
+                                    for (uint32_t i = 0; i < coff; i += 4)
+                                        nv_pramin_wr32(io, &win, core_pb + i,
+                                                       (uint32_t)cs[i] | ((uint32_t)cs[i+1]<<8) |
+                                                       ((uint32_t)cs[i+2]<<16) | ((uint32_t)cs[i+3]<<24));
+                                    io->wr(io->ctx, core_user + 0x0, coff);
+                                    uint32_t cget = 0; int p1done = 0;
+                                    for (int it = 0; it < 500; it++) {
+                                        cget = io->rd(io->ctx, core_user + 0x4);
+                                        if ((cget & 0xffcu) == (coff & 0xffcu)) { p1done = 1; break; }
+                                        bar_udelay(NULL, 1000);
+                                    }
+                                    printf("СЛОЙ 5 C.4d-ф1: core init+update %u байт (%u мет) PUT=0x%x GET=0x%x %s\n",
+                                           coff, coff/8u, coff, cget, p1done ? "GET==PUT (окна назначены)" : "GET!=PUT");
+                                    l5_modeset_ok = p1done;
+
+                                    /* --- ФАЗА 2: modeset (core) + image (window), UPDATE'ы СЦЕПЛЕНЫ (interlock).
+                                       Дописываем в те же пушбуферы (core с offset coff). core UPDATE ждёт окно0,
+                                       window UPDATE ждёт core → защёлкиваются вместе (атомарный modeset+flip). */
+                                    uint32_t c2 = coff;               /* старт фазы 2 в core-пушбуфере */
                                     nv_gsp_disp_build_core_modeset(cs, &coff, &mt, head, md_sor, md_proto);
                                     nv_gsp_disp_build_core_update(cs, &coff, wnd_bit /*интерлок с окном0*/);
-                                    for (uint32_t i = 0; i < coff; i += 4)
+                                    for (uint32_t i = c2; i < coff; i += 4)
                                         nv_pramin_wr32(io, &win, core_pb + i,
                                                        (uint32_t)cs[i] | ((uint32_t)cs[i+1]<<8) |
                                                        ((uint32_t)cs[i+2]<<16) | ((uint32_t)cs[i+3]<<24));
@@ -1003,14 +1025,10 @@ static int run(const nv_mmio_t *io, struct arena *ar, const char *bdf)
                                         nv_pramin_wr32(io, &win, win_pb + i,
                                                        (uint32_t)ws[i] | ((uint32_t)ws[i+1]<<8) |
                                                        ((uint32_t)ws[i+2]<<16) | ((uint32_t)ws[i+3]<<24));
-
-                                    /* 5) Бампнуть window PUT (встанет на UPDATE, ждёт core), затем core PUT
-                                          (защёлкнутся вместе). PUT/GET: user+0x0/+0x4, PTR[11:2]=байт-offset. */
-                                    uint32_t core_user = NVC77D_CORE_USER_BASE;                 /* 0x680000 */
-                                    uint32_t win_user  = NVC37E_WINDOW_USER_BASE + head*0x1000u;/* 0x690000 */
+                                    /* Бампнуть window PUT (встанет на UPDATE, ждёт core), затем core PUT. */
                                     io->wr(io->ctx, win_user  + 0x0, woff);
                                     io->wr(io->ctx, core_user + 0x0, coff);
-                                    uint32_t cget = 0, wget = 0; int cdone = 0, wdone = 0;
+                                    uint32_t wget = 0; int cdone = 0, wdone = 0;
                                     for (int it = 0; it < 1000; it++) {
                                         cget = io->rd(io->ctx, core_user + 0x4);
                                         wget = io->rd(io->ctx, win_user  + 0x4);
@@ -1019,13 +1037,11 @@ static int run(const nv_mmio_t *io, struct arena *ar, const char *bdf)
                                         if (cdone && wdone) break;
                                         bar_udelay(NULL, 1000);
                                     }
-                                    printf("СЛОЙ 5 C.4d: core поток=%u байт (%u мет) PUT=0x%x GET=0x%x %s\n",
-                                           coff, coff/8u, coff, cget, cdone ? "GET==PUT" : "GET!=PUT");
-                                    printf("СЛОЙ 5 C.4e: window %ux%u pit=%u FB=0x%llx поток=%u байт (%u мет) PUT=0x%x GET=0x%x %s\n",
-                                           w, h, pit, (unsigned long long)fb2, woff, woff/8u, woff, wget,
-                                           (cdone && wdone) ? "  ★ INTERLOCKED MODESET+FLIP (GET==PUT) — ПИКСЕЛИ ★"
-                                                            : "  (GET!=PUT — см. диагностику ниже)");
-                                    l5_modeset_ok = cdone;
+                                    printf("СЛОЙ 5 C.4e-ф2: core modeset PUT=0x%x GET=0x%x %s; window %ux%u pit=%u поток=%u байт PUT=0x%x GET=0x%x %s\n",
+                                           coff, cget, cdone ? "GET==PUT" : "GET!=PUT",
+                                           w, h, pit, woff, woff, wget, wdone ? "GET==PUT" : "GET!=PUT");
+                                    if (cdone && wdone)
+                                        printf("СЛОЙ 5 C.4e: ★ INTERLOCKED MODESET+FLIP (оба GET==PUT) — ПИКСЕЛИ НА МОНИТОРЕ ★\n");
                                     l5_scanout_ok = (cdone && wdone);
 
                                     /* Дать монитору просинхронизироваться + показать кадр (видно на HDMI). */
