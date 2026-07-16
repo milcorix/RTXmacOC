@@ -253,9 +253,7 @@ void nv_gsp_disp_build_core_modeset(uint8_t *pb, uint32_t *off, const nv_edid_ti
     uint32_t vbs = vbe + t->vact;
     uint32_t hertz = t->pclk_khz * 1000u;   /* HERTZ[30:0] */
 
-    /* SOR: владелец = head, протокол (TMDS/DP). */
-    nv_gsp_disp_push_method(pb, off, NVC37D_SOR_SET_CONTROL(sor),
-                            (1u << head) | (protocol << 8));
+    (void)sor; (void)protocol;   /* SOR привязывается отдельной фазой (build_core_sor) */
     /* head: RGB procamp (headc37d_procamp: COLOR_SPACE RGB, BLACK_LEVEL GRAPHICS[31:30]=2). */
     nv_gsp_disp_push_method(pb, off, NVC37D_HEAD_SET_PROCAMP(head), (2u << 30));
     /* output resource: полярности sync (NEGATIVE_TRUE=1 если не positive) + 24bpp. */
@@ -282,6 +280,17 @@ void nv_gsp_disp_build_core_modeset(uint8_t *pb, uint32_t *off, const nv_edid_ti
     nv_gsp_disp_push_method(pb, off, NVC37D_HEAD_SET_VIEWPORT_POINT_IN(head), 0u);
     nv_gsp_disp_push_method(pb, off, NVC37D_HEAD_SET_VIEWPORT_SIZE_IN(head),  t->hact | (t->vact << 16));
     nv_gsp_disp_push_method(pb, off, NVC37D_HEAD_SET_VIEWPORT_SIZE_OUT(head), t->hact | (t->vact << 16));
+}
+
+void nv_gsp_disp_build_core_sor(uint8_t *pb, uint32_t *off, uint32_t sor,
+                                uint32_t head, uint32_t protocol)
+{
+    if (!pb || !off) return;
+    /* SOR_SET_CONTROL: OWNER_MASK[7:0]=1<<head, PROTOCOL[11:8]. Должно быть защёлкнуто
+       (UPDATE) ДО head OUTPUT_RESOURCE, иначе OUTPUT_RESOURCE→INVALID_ARG (голова ещё
+       не владеет OR). Порт sorc37d. */
+    nv_gsp_disp_push_method(pb, off, NVC37D_SOR_SET_CONTROL(sor),
+                            (1u << head) | (protocol << 8));
 }
 
 void nv_gsp_disp_build_core_init(uint8_t *pb, uint32_t *off, uint32_t notifier_handle)

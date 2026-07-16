@@ -186,12 +186,19 @@ typedef struct {
 int nv_edid_parse_dtd(const uint8_t *edid, uint32_t edid_len, nv_edid_timing *t);
 
 /*
- * 5C.4c: собрать поток методов core-channel head/OR-modeset в pb[*off] по таймингу t
- * для head/sor/protocol (БЕЗ финального UPDATE — его добавляет _build_core_update):
- * SOR_SET_CONTROL, HEAD_SET_PROCAMP, OUTPUT_RESOURCE, RASTER_SIZE/SYNC_END/BLANK_END/
- * BLANK_START/VERT_BLANK2, HEAD_SET_CONTROL(progressive), PIXEL_CLOCK_FREQUENCY(+MAX),
+ * 5C.4d: SOR_SET_CONTROL (владелец=head, протокол). Отдельная фаза — должна быть
+ * защёлкнута (UPDATE) ДО head-modeset, иначе OUTPUT_RESOURCE→INVALID_ARG. Порт sorc37d.
+ */
+void nv_gsp_disp_build_core_sor(uint8_t *pb, uint32_t *off, uint32_t sor,
+                                uint32_t head, uint32_t protocol);
+
+/*
+ * 5C.4c: собрать поток методов core-channel head-modeset в pb[*off] по таймингу t
+ * (SOR привязывается отдельно build_core_sor; БЕЗ финального UPDATE):
+ * HEAD_SET_PROCAMP, OUTPUT_RESOURCE, RASTER_SIZE/SYNC_END/BLANK_END/BLANK_START/
+ * VERT_BLANK2, HEAD_SET_CONTROL(progressive), PIXEL_CLOCK_FREQUENCY(+MAX),
  * HEAD_USAGE_BOUNDS, VIEWPORT_POINT_IN/SIZE_IN/SIZE_OUT. Порт headc37d_mode/_or/_view.
- * Возврат: *off продвинут (15 методов).
+ * Возврат: *off продвинут (14 методов). sor/protocol не используются (совместимость).
  */
 void nv_gsp_disp_build_core_modeset(uint8_t *pb, uint32_t *off, const nv_edid_timing *t,
                                     uint32_t head, uint32_t sor, uint32_t protocol);

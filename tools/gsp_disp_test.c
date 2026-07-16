@@ -339,12 +339,17 @@ static void test_edid_dtd_and_modeset(void)
     CHECK(t.hsync_pos == 1 && t.vsync_pos == 1, "sync polarity positive");
 
     uint8_t pb[256]; memset(pb, 0, sizeof(pb)); uint32_t off = 0;
+    uint32_t soff = 0;
+    nv_gsp_disp_build_core_sor(pb, &soff, /*sor*/0, /*head*/0, NVC37D_SOR_PROTOCOL_SINGLE_TMDS_A);
+    CHECK(soff == 1*8, "build_core_sor: 1 метод");
+    CHECK((ld32(pb+0) & 0x3ffc) == NVC37D_SOR_SET_CONTROL(0), "SOR метод == SOR_SET_CONTROL(0)");
+    CHECK(ld32(pb+4) == (1u | (NVC37D_SOR_PROTOCOL_SINGLE_TMDS_A << 8)), "SOR: OWNER head0 | TMDS_A");
+    memset(pb, 0, sizeof(pb)); off = 0;
     nv_gsp_disp_build_core_modeset(pb, &off, &t, /*head*/0, /*sor*/0,
                                    NVC37D_SOR_PROTOCOL_SINGLE_TMDS_A);
-    CHECK(off == 15*8, "поток: 15 методов (SOR/PROCAMP/ORES/5×raster/CTRL/2×pclk/usage/3×viewport)");
-    /* первый метод — SOR_SET_CONTROL(0) = OWNER head0(1) | TMDS_A<<8 */
-    CHECK((ld32(pb+0) & 0x3ffc) == NVC37D_SOR_SET_CONTROL(0), "метод[0] == SOR_SET_CONTROL(0)");
-    CHECK(ld32(pb+4) == (1u | (NVC37D_SOR_PROTOCOL_SINGLE_TMDS_A << 8)), "SOR: OWNER head0 | TMDS_A");
+    CHECK(off == 14*8, "поток: 14 методов (PROCAMP/ORES/5×raster/CTRL/2×pclk/usage/3×viewport)");
+    /* первый метод — PROCAMP (SOR теперь отдельно) */
+    CHECK((ld32(pb+0) & 0x3ffc) == NVC37D_HEAD_SET_PROCAMP(0), "метод[0] == HEAD_SET_PROCAMP(0)");
     /* найти RASTER_SIZE, PIXEL_CLOCK, HEAD_USAGE_BOUNDS в потоке */
     int found_raster = 0, found_pclk = 0, found_usage = 0;
     for (uint32_t o = 0; o < off; o += 8) {

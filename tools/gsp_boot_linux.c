@@ -1006,10 +1006,30 @@ static int run(const nv_mmio_t *io, struct arena *ar, const char *bdf)
                                            coff, coff/8u, coff, cget, p1done ? "GET==PUT (окна назначены)" : "GET!=PUT");
                                     l5_modeset_ok = p1done;
 
-                                    /* --- ФАЗА 2: modeset (core) + image (window), UPDATE'ы СЦЕПЛЕНЫ (interlock).
+                                    /* --- ФАЗА 2: SOR_SET_CONTROL + UPDATE (привязать SOR к голове) ---
+                                       ДО head OUTPUT_RESOURCE, иначе OUTPUT_RESOURCE→INVALID_ARG
+                                       (голова не владеет OR). Диагностика прогона #4 показала именно это. */
+                                    uint32_t cs2 = coff;
+                                    nv_gsp_disp_build_core_sor(cs, &coff, md_sor, head, md_proto);
+                                    nv_gsp_disp_build_core_update(cs, &coff, 0u);
+                                    for (uint32_t i = cs2; i < coff; i += 4)
+                                        nv_pramin_wr32(io, &win, core_pb + i,
+                                                       (uint32_t)cs[i] | ((uint32_t)cs[i+1]<<8) |
+                                                       ((uint32_t)cs[i+2]<<16) | ((uint32_t)cs[i+3]<<24));
+                                    io->wr(io->ctx, core_user + 0x0, coff);
+                                    int psordone = 0;
+                                    for (int it = 0; it < 500; it++) {
+                                        cget = io->rd(io->ctx, core_user + 0x4);
+                                        if ((cget & 0xffcu) == (coff & 0xffcu)) { psordone = 1; break; }
+                                        bar_udelay(NULL, 1000);
+                                    }
+                                    printf("СЛОЙ 5 C.4d-ф2: SOR attach PUT=0x%x GET=0x%x %s\n",
+                                           coff, cget, psordone ? "GET==PUT (SOR привязан к head0)" : "GET!=PUT");
+
+                                    /* --- ФАЗА 3: head modeset (core) + image (window), UPDATE'ы СЦЕПЛЕНЫ.
                                        Дописываем в те же пушбуферы (core с offset coff). core UPDATE ждёт окно0,
                                        window UPDATE ждёт core → защёлкиваются вместе (атомарный modeset+flip). */
-                                    uint32_t c2 = coff;               /* старт фазы 2 в core-пушбуфере */
+                                    uint32_t c2 = coff;               /* старт фазы 3 в core-пушбуфере */
                                     nv_gsp_disp_build_core_modeset(cs, &coff, &mt, head, md_sor, md_proto);
                                     nv_gsp_disp_build_core_update(cs, &coff, wnd_bit /*интерлок с окном0*/);
                                     for (uint32_t i = c2; i < coff; i += 4)
@@ -1040,7 +1060,7 @@ static int run(const nv_mmio_t *io, struct arena *ar, const char *bdf)
                                         if (cdone && wdone) break;
                                         bar_udelay(NULL, 1000);
                                     }
-                                    printf("СЛОЙ 5 C.4e-ф2: core modeset PUT=0x%x GET=0x%x %s; window %ux%u pit=%u поток=%u байт PUT=0x%x GET=0x%x %s\n",
+                                    printf("СЛОЙ 5 C.4e-ф3: core modeset PUT=0x%x GET=0x%x %s; window %ux%u pit=%u поток=%u байт PUT=0x%x GET=0x%x %s\n",
                                            coff, cget, cdone ? "GET==PUT" : "GET!=PUT",
                                            w, h, pit, woff, woff, wget, wdone ? "GET==PUT" : "GET!=PUT");
                                     if (cdone && wdone)
