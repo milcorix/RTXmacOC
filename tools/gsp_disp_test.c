@@ -365,7 +365,7 @@ static void test_edid_dtd_and_modeset(void)
             found_pclk = 1;
         }
         if (m == NVC37D_HEAD_SET_HEAD_USAGE_BOUNDS(0)) {
-            CHECK(ld32(pb+o+4) == NVC37D_HEAD_USAGE_BOUNDS_DEFAULT, "HEAD_USAGE_BOUNDS = 0x124");
+            CHECK(ld32(pb+o+4) == NVC37D_HEAD_USAGE_BOUNDS_DEFAULT, "HEAD_USAGE_BOUNDS = минимум (0)");
             found_usage = 1;
         }
     }

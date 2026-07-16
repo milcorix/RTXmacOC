@@ -89,8 +89,11 @@
 #define NVC37D_HEAD_SET_HEAD_USAGE_BOUNDS(a)          (0x00002030u + (a)*0x400u)
 #define NVC37D_HEAD_SET_VIEWPORT_POINT_IN(a)          (0x00002048u + (a)*0x400u)
 #define NVC37D_HEAD_SET_RASTER_VERT_BLANK2(a)         (0x00002074u + (a)*0x400u)  /* blank2e<<16|blank2s (progressive: 0<<16|1) */
-/* HEAD_USAGE_BOUNDS: CURSOR W256_H256=4[2:0], OUTPUT_LUT 1025=2[5:4], UPSCALING_ALLOWED=1[8:8]. */
-#define NVC37D_HEAD_USAGE_BOUNDS_DEFAULT   (4u | (2u << 4) | (1u << 8))  /* 0x124 */
+/* HEAD_USAGE_BOUNDS: CURSOR[2:0], OUTPUT_LUT[5:4], UPSCALING_ALLOWED[8:8]. nouveau ставит
+   CURSOR W256|OUTPUT_LUT 1025|UPSCALING (0x124), но это ТРЕБУЕТ выделенных cursor/output-LUT
+   ctx-dma. Для чистого scanout окна используем МИНИМАЛЬНЫЕ границы (всё NONE=0) — иначе
+   INVALID_ARG (прогон #6: mthd=0x2030 data=0x124). */
+#define NVC37D_HEAD_USAGE_BOUNDS_DEFAULT   0u
 /* HEAD_SET_CONTROL(0x2008): STRUCTURE[1:0] PROGRESSIVE=0. */
 #define NVC37D_HEAD_CONTROL_PROGRESSIVE    0u
 
