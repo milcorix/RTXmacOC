@@ -1024,9 +1024,13 @@ static int run(const nv_mmio_t *io, struct arena *ar, const char *bdf)
                                         nv_pramin_wr32(io, &win, win_pb + i,
                                                        (uint32_t)ws[i] | ((uint32_t)ws[i+1]<<8) |
                                                        ((uint32_t)ws[i+2]<<16) | ((uint32_t)ws[i+3]<<24));
-                                    /* Бампнуть window PUT (встанет на UPDATE, ждёт core), затем core PUT. */
-                                    io->wr(io->ctx, win_user  + 0x0, woff);
+                                    /* Бампнуть CORE PUT первым: core дойдёт до interlocked-UPDATE и будет
+                                       ЖДАТЬ окно0 (не коммитит один). Затем window PUT → окно доходит до
+                                       своего interlocked-UPDATE → рандеву, оба защёлкиваются атомарно.
+                                       (Порядок важен: если бампнуть window первым, оно коммитится в
+                                       одиночку до взвода core, и core потом ждёт несуществующий апдейт.) */
                                     io->wr(io->ctx, core_user + 0x0, coff);
+                                    io->wr(io->ctx, win_user  + 0x0, woff);
                                     uint32_t wget = 0; int cdone = 0, wdone = 0;
                                     for (int it = 0; it < 1000; it++) {
                                         cget = io->rd(io->ctx, core_user + 0x4);
