@@ -116,7 +116,7 @@
 #define NVC37E_UPDATE                  0x00000200u   /* данные: 0x1 (| INTERLOCK_WITH_WIN_IMM) */
 #define NVC37E_SET_PRESENT_CONTROL     0x00000308u   /* MIN_PRESENT_INTERVAL[3:0]|BEGIN_MODE[6:4] NON_TEARING=0 */
 #define NVC37E_SET_SIZE                0x00000224u   /* WIDTH[15:0]|HEIGHT[31:16] */
-#define NVC37E_SET_STORAGE             0x00000228u   /* BLOCK_HEIGHT[3:0]|MEMORY_LAYOUT[4:4] (PITCH=1) */
+#define NVC37E_SET_STORAGE             0x00000228u   /* C67E: ТОЛЬКО BLOCK_HEIGHT[3:0]; бита MEMORY_LAYOUT нет (убран после C37E) */
 #define NVC37E_SET_PARAMS              0x0000022Cu   /* FORMAT[7:0]|COLOR_SPACE[9:8]|INPUT_RANGE[13:12] */
 #define NVC37E_SET_PLANAR_STORAGE(b)   (0x00000230u + (b)*0x4u)  /* PITCH[12:0]=pitch>>6 */
 #define NVC37E_SET_CONTEXT_DMA_ISO(b)  (0x00000240u + (b)*0x4u)  /* HANDLE[31:0] */
@@ -136,7 +136,9 @@
 #define NVC37E_CONST_ALPHA_K1  0xffu   /* K1=0xff (alpha 1.0), K2=0 */
 /* CONTROL: COLOR_KEY_SELECT=DISABLE, DEPTH[11:4]=255 (нижний слой, 255-zpos для одиночного). */
 #define NVC37E_COMPOSITION_CONTROL_VAL  (255u << 4)   /* 0xFF0 */
-#define NVC37E_STORAGE_MEMORY_LAYOUT_PITCH  (1u << 4)
+/* C67E (Ampere/Ada): линейная поверхность = BLOCK_HEIGHT_ONE_GOB(0), БЕЗ бита layout
+   (wndwc67e_image_set шлёт только BLOCK_HEIGHT). Старый C37E-бит (1<<4) на C67E — мусор. */
+#define NVC67E_STORAGE_BLOCK_HEIGHT_ONE_GOB  0u
 #define NVC37E_PARAMS_FORMAT_X8R8G8B8   0xE6u   /* dword A/X,R,G,B (наш FB: 0x00RRGGBB) */
 #define NVC37E_PARAMS_FORMAT_A8R8G8B8   0xCFu
 #define NVC37E_INTERLOCK_WITH_CORE_BIT  (1u << 0)   /* в NVC37E SET_INTERLOCK_FLAGS */

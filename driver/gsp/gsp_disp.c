@@ -381,8 +381,9 @@ void nv_gsp_disp_build_window_image(uint8_t *pb, uint32_t *off, uint32_t format,
     /* SET_PRESENT_CONTROL: MIN_PRESENT_INTERVAL=0, BEGIN_MODE NON_TEARING=0. */
     nv_gsp_disp_push_method(pb, off, NVC37E_SET_PRESENT_CONTROL, 0u);
     nv_gsp_disp_push_method(pb, off, NVC37E_SET_SIZE, (w & 0xffffu) | ((h & 0xffffu) << 16));
-    /* линейный (pitch) layout, block_height=0. */
-    nv_gsp_disp_push_method(pb, off, NVC37E_SET_STORAGE, NVC37E_STORAGE_MEMORY_LAYOUT_PITCH);
+    /* C67E: линейная поверхность = BLOCK_HEIGHT_ONE_GOB(0). Бита MEMORY_LAYOUT нет —
+       раньше слали 1<<4 (C37E), что на C67E — мусорный бит и ломало surface storage. */
+    nv_gsp_disp_push_method(pb, off, NVC37E_SET_STORAGE, NVC67E_STORAGE_BLOCK_HEIGHT_ONE_GOB);
     /* FORMAT | COLOR_SPACE RGB(0) | INPUT_RANGE BYPASS(0). */
     nv_gsp_disp_push_method(pb, off, NVC37E_SET_PARAMS, (format & 0xffu));
     /* PLANAR_STORAGE pitch в единицах 64б (>>6). */
