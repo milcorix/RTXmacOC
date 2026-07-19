@@ -1,6 +1,6 @@
 # RTXmacOC
 
-[![build-macos](https://github.com/prd1324/RTXmacOC/actions/workflows/build-macos.yml/badge.svg)](https://github.com/prd1324/RTXmacOC/actions/workflows/build-macos.yml)
+[![build-macos](https://github.com/milcorix/RTXmacOC/actions/workflows/build-macos.yml/badge.svg)](https://github.com/milcorix/RTXmacOC/actions/workflows/build-macos.yml)
 
 **Open-source драйвер NVIDIA RTX для macOS (Hackintosh под OpenCore).**
 
@@ -31,13 +31,13 @@ GPU-виртуальное адресное пространство (корен
 `MAP_MEMORY_DMA` был отвергнут GSP (`NV_ERR_INVALID_FUNCTION` — путь vGPU) и оставлен
 как задокументированный отрицательный результат.
 
-> ⚠️ **Блокер вывода изображения.** В современном macOS (Big Sur+) **нет публичной
-> точки расширения** для стороннего kext/dext как полноценного GPU-акселератора
-> для WindowServer: мешают library validation, приватные Metal/IOAccelerator-
-> интерфейсы и то, что DriverKit не поддерживает графику. То есть слой 5 (вывод
-> картинки) сторонним драйвером на актуальной macOS **заблокирован политикой
-> Apple**, а не нашим кодом. Разбор и источники — [docs/macos-graphics-stack.md](docs/macos-graphics-stack.md).
-> Направление проекта в свете этого пересматривается.
+> **Статус вывода изображения (2026-07-19).** Слой 5 полностью замкнут на железе:
+> GSP-modeset + window flip = **пиксели на мониторе** (RTX 4070S, 1280×1024@HDMI).
+> Блокер был аппаратный (мусорный бит SET_STORAGE для класса C67E), а не
+> политический. Путь в macOS: IOFramebuffer kext (`MilcorixFB`) + тот же GSP-core,
+> среда = OpenCore + SIP off + AMFIPass (Tahoe Root Patch). Metal/ускорение —
+> отдельный трек, требует обход Library Validation. Разбор замков:
+> [docs/macos-graphics-stack.md](docs/macos-graphics-stack.md).
 
 Легенда: 🟡 компилируется (CI) · 📄 совпадает с исходником · 🟢 проверено на железе.
 
@@ -47,7 +47,7 @@ GPU-виртуальное адресное пространство (корен
 | 2 | **GSP bring-up** — поднять GPU через GSP, наладить RPC | 🟢 **ЗАВЕРШЁН на железе** (Linux/VFIO): FWSEC-FRTS→WPR2→Booter→GSP RISC-V active → **`GSP_INIT_DONE` по RPC** |
 | 3 | **Memory management (GMMU/VRAM)** через RPC | 🟢 **A+B+C+D на железе**: RPC/RM-цепочка; FB-control + VASPACE; VRAM memlist; **D — прямой GMMU** (page-tables во VRAM + `COPY_SERVER_RESERVED_PDES`, `status=NV_OK`). RPC `MAP_MEMORY_DMA` — тупик (vGPU-путь) |
 | 4 | Command submission (каналы) | 🟢 **ЗАМКНУТ на железе**: канал `AMPERE_CHANNEL_GPFIFO_A` (A) + объект CE `AMPERE_DMA_COPY_B` (B) + **pushbuffer исполнен, host-семафор `0xcafe0001` (C) — первая команда GPU**. Весь путь submission работает |
-| 5 | **Display / modeset** — вывод изображения | 🟢 **5A+5B+5C.1..4d на железе**: движок перечислён (heads=4, 7 выходов), **2 монитора + EDID по DDC**, **display root + core + SOR + window channel + framebuffer**, **core-channel modeset САБМИТ проглочен (GET==PUT, 51 метод, 1280×1024@108МГц + SOR0 запрограммированы — первая команда в дисплейный канал)**. Дальше — window surface + ctx-dma (картинка); ⛔ интеграция в macOS WindowServer — отдельный трек, замок Apple |
+| 5 | **Display / modeset** — вывод изображения | 🟢 **ЗАМКНУТ НА ЖЕЛЕЗЕ (2026-07-19)**: слои 5A→5C.4e все пройдены, **window flip + scanout = пиксели на мониторе** (1280×1024@HDMI, RTX 4070S). Фикс: SET_STORAGE бит MEMORY_LAYOUT убран для C67E (Ampere/Ada). Диагностика: SOR ARM active, vline растёт, SUPERVISOR=0. Осталось: интеграция в macOS kext (`MilcorixFB`). |
 | 6 | 3D / compute (Metal) | ⛔ закрытый интерфейс |
 
 ### Подробнее по слоям
