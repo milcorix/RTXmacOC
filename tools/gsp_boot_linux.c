@@ -968,7 +968,7 @@ static int run(const nv_mmio_t *io, struct arena *ar, const char *bdf)
 
                                     uint32_t head = 0;
                                     uint32_t wnd = 0;                 /* window-инстанс (owner head0) */
-                                    uint32_t wnd_bit = 1u << wnd;     /* бит окна в SET_WINDOW_INTERLOCK_FLAGS */
+                                    (void)wnd;                        /* ф4: окно флипается standalone, без interlock-бита */
                                     uint64_t fb2 = 0x14000000ull;
                                     uint32_t w = mt.hact, h = mt.vact, pit = w * 4u;
 
