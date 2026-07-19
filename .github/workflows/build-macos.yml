@@ -111,6 +111,34 @@ jobs:
             -o build/MilcorixFB.o
           echo "OK: MilcorixFB kext compiles (IOFramebuffer available)"
 
+      - name: Build portable GSP core as kernel C (compile-check, layers 2-5)
+        run: |
+          mkdir -p build
+          SDK="$(xcrun --sdk macosx --show-sdk-path)"
+          # Переносимое ядро driver/gsp/*.c компилируем ровно в среде ядра macOS:
+          # freestanding C, без libc, с kext-дефайнами. Это проверяет, что весь
+          # core (falcon/booter/gsp_rm/gmmu/gsp_disp/...) реально kernel-safe, а не
+          # только «собирается обычным cc на Linux». Каждый файл — отдельно, чтобы
+          # было видно, какой именно не переносится.
+          FAIL=0
+          for f in driver/gsp/*.c; do
+            if clang -c "$f" \
+                -arch x86_64 \
+                -isysroot "$SDK" \
+                -I"$SDK/System/Library/Frameworks/Kernel.framework/Headers" \
+                -ffreestanding -fno-builtin -fno-common \
+                -DKERNEL -DKERNEL_PRIVATE -DAPPLE \
+                -std=gnu11 \
+                -o "build/$(basename "$f" .c).ko" 2>"build/$(basename "$f").log"; then
+              echo "OK:   $f"
+            else
+              echo "FAIL: $f"
+              cat "build/$(basename "$f").log"
+              FAIL=1
+            fi
+          done
+          [ "$FAIL" -eq 0 ] && echo "ВЕСЬ CORE kernel-C компилируется" || echo "часть core не переносится (см. выше)"
+
       - name: Build dext RTXProbeDext (iig + compile-check)
         continue-on-error: true
         run: |
