@@ -65,4 +65,25 @@ clang++ -c \
 echo "OK: RTXProbeDext компилируется против DriverKit SDK"
 echo "::endgroup::"
 
+echo "::group::4. kext MilcorixFB (IOFramebuffer, compile-check)"
+# MilcorixFB — subclass IOFramebuffer (слой 5, вывод картинки). Компилируется
+# против Kernel.framework, как RTXProbe. IOGraphics-заголовки (IOFramebuffer.h)
+# в публичном SDK могут отсутствовать — если шаг падает на "file not found",
+# заголовки нужно завендорить (driver/macos/vendored/IOKit/graphics/).
+MFB_GRAPHICS_INC=""
+if [ -d "driver/macos/vendored" ]; then
+  MFB_GRAPHICS_INC="-Idriver/macos/vendored"
+fi
+clang++ -c driver/macos/MilcorixFB.cpp \
+  -arch x86_64 \
+  -isysroot "$MAC_SDK" \
+  -I"$MAC_SDK/System/Library/Frameworks/Kernel.framework/Headers" \
+  $MFB_GRAPHICS_INC \
+  -fapple-kext -mkernel -fno-builtin -fno-rtti -fno-exceptions -fno-common \
+  -DKERNEL -DKERNEL_PRIVATE -DDRIVER_PRIVATE -DAPPLE -DNeXT \
+  -std=gnu++17 \
+  -o build/MilcorixFB.o
+echo "OK: MilcorixFB.cpp компилируется (IOFramebuffer subclass)"
+echo "::endgroup::"
+
 echo "ВСЕ СБОРКИ ПРОШЛИ"

@@ -95,6 +95,22 @@ jobs:
             -o build/RTXProbe.o
           echo "OK: RTXProbe kext compiles"
 
+      - name: Build kext MilcorixFB (IOFramebuffer, compile-check, layer 5)
+        continue-on-error: true
+        run: |
+          mkdir -p build
+          SDK="$(xcrun --sdk macosx --show-sdk-path)"
+          clang++ -x c++ -c driver/macos/MilcorixFB.cpp \
+            -arch x86_64 \
+            -isysroot "$SDK" \
+            -I"$SDK/System/Library/Frameworks/Kernel.framework/Headers" \
+            -I"$SDK/System/Library/Frameworks/Kernel.framework/PrivateHeaders" \
+            -fapple-kext -fno-builtin -fno-exceptions -fno-rtti -fno-common \
+            -DKERNEL -DKERNEL_PRIVATE -DDRIVER_PRIVATE -DAPPLE -DNeXT \
+            -std=gnu++17 \
+            -o build/MilcorixFB.o
+          echo "OK: MilcorixFB kext compiles (IOFramebuffer available)"
+
       - name: Build dext RTXProbeDext (iig + compile-check)
         continue-on-error: true
         run: |
