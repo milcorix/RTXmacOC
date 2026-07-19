@@ -9,6 +9,8 @@
 #include "MilcorixFB.h"
 #include <IOKit/IOLib.h>
 #include <IOKit/IODeviceMemory.h>
+#include <IOKit/IOBufferMemoryDescriptor.h>
+#include "../gsp/nv_dma.h"
 
 #define super IOFramebuffer
 OSDefineMetaClassAndStructors(MilcorixFB, IOFramebuffer);
@@ -34,12 +36,62 @@ bool MilcorixFB::mapBars(void)
     return true;
 }
 
+/*
+ * allocDmaArena — выделить физически непрерывную DMA-арену под весь bring-up
+ * (fwimage ~36 МиБ + radix3 + bootloader + libos-логи + shm + rmargs). На Linux
+ * это делал VFIO (VA→IOVA линейно). В macOS IOMMU выключен (DisableIoMapper=true
+ * в OpenCore config), поэтому GPU видит ФИЗИЧЕСКИЙ адрес → буфер должен быть
+ * физически непрерывным, и его физадрес = IOVA для GSP.
+ *
+ * IOBufferMemoryDescriptor::inTaskWithPhysicalMask(kIOMemoryPhysicallyContiguous)
+ * даёт непрерывный блок; маска 32 бита — GSP DMA-движок адресует sysmem внизу 4 ГиБ
+ * (как ARENA_IOVA=0x10000000 на Linux). arena_alloc (переносимый nv_dma.h) — та же
+ * арифметика поверх базы, платформа лишь поставляет (va, phys, size).
+ */
+bool MilcorixFB::allocDmaArena(void)
+{
+    if (fDmaBuf) return true;   // уже выделена
+
+    IOOptionBits opts = kIODirectionInOut | kIOMemoryPhysicallyContiguous;
+    // Маска физадреса: держим арену в нижних 4 ГиБ (GSP sysmem-DMA как на Linux).
+    mach_vm_address_t physMask = 0x00000000FFFFF000ULL;
+
+    fDmaBuf = IOBufferMemoryDescriptor::inTaskWithPhysicalMask(
+        kernel_task, opts, NV_DMA_ARENA_SIZE, physMask);
+    if (!fDmaBuf) { IOLog("MilcorixFB: DMA-арена alloc FAIL\n"); return false; }
+
+    if (fDmaBuf->prepare() != kIOReturnSuccess) {
+        IOLog("MilcorixFB: DMA-арена prepare FAIL\n");
+        fDmaBuf->release(); fDmaBuf = nullptr; return false;
+    }
+
+    fArenaVa = fDmaBuf->getBytesNoCopy();
+    IOByteCount segLen = 0;
+    addr64_t phys = fDmaBuf->getPhysicalSegment(0, &segLen, kIOMemoryMapperNone);
+    fArenaPhys = (uint64_t)phys;
+    fArenaSize = NV_DMA_ARENA_SIZE;
+
+    if (!fArenaVa || !fArenaPhys || segLen < NV_DMA_ARENA_SIZE) {
+        IOLog("MilcorixFB: DMA-арена не непрерывна (segLen=0x%llx)\n",
+              (unsigned long long)segLen);
+        fDmaBuf->complete(); fDmaBuf->release(); fDmaBuf = nullptr; return false;
+    }
+
+    bzero(fArenaVa, NV_DMA_ARENA_SIZE);
+    IOLog("MilcorixFB: DMA-арена VA=%p phys=0x%llx size=0x%llx\n",
+          fArenaVa, (unsigned long long)fArenaPhys, (unsigned long long)fArenaSize);
+    return true;
+}
+
 bool MilcorixFB::gspBringUp(void)
 {
-    // TODO(Фаза 0/1): вызвать переносимый core — GSP boot (слои 2–4) + display enum (5A/5B)
-    // + display root/каналы (5C) через nv_mmio_t{ctx=fBar0, rd=mfb_rd, wr=mfb_wr, udelay=mfb_udelay}.
-    // Это ровно код tools/gsp_boot_linux.c, но под IOKit. Пока — заглушка.
-    IOLog("MilcorixFB: gspBringUp (TODO: подключить core driver/gsp/*)\n");
+    // DMA-арена под весь bring-up (физически непрерывная, IOMMU off).
+    if (!allocDmaArena()) return false;
+
+    // TODO(Фаза 0/1): вызвать переносимый core через nv_mmio_t{ctx=fBar0,...} и
+    // nv_dma_arena{va=fArenaVa, phys=fArenaPhys, size=fArenaSize}. Это логика
+    // tools/gsp_boot_linux.c: FWSEC-FRTS → staging GSP-RM → Booter → RPC → слои 3-5.
+    IOLog("MilcorixFB: gspBringUp — арена готова (TODO: оркестрация слоёв 2-5)\n");
     return true;
 }
 
@@ -58,7 +110,12 @@ bool MilcorixFB::start(IOService *provider)
     if (!fPci) return false;
     if (!super::start(provider)) return false;
 
+    // Обнулить состояние (ivar'ы kext не гарантированно занулены).
+    fBar0Map = nullptr; fBar0 = nullptr; fFbMem = nullptr;
+    fDmaBuf = nullptr;  fArenaVa = nullptr; fArenaPhys = 0; fArenaSize = 0;
+
     fPci->setMemoryEnable(true);
+    fPci->setBusMasterEnable(true);   // GSP DMA читает арену из sysmem (BusMaster)
     if (!mapBars()) return false;
 
     // Дефолтный режим до чтения EDID (переопределится в enableController/modeset).
@@ -68,8 +125,20 @@ bool MilcorixFB::start(IOService *provider)
     return true;
 }
 
+void MilcorixFB::freeDmaArena(void)
+{
+    if (fDmaBuf) {
+        fDmaBuf->complete();
+        fDmaBuf->release();
+        fDmaBuf = nullptr;
+    }
+    fArenaVa = nullptr; fArenaPhys = 0; fArenaSize = 0;
+}
+
 void MilcorixFB::stop(IOService *provider)
 {
+    freeDmaArena();
+    if (fFbMem)   { fFbMem->release();   fFbMem = nullptr; }
     if (fBar0Map) { fBar0Map->release(); fBar0Map = nullptr; }
     super::stop(provider);
 }

@@ -15,6 +15,7 @@
 
 #include <IOKit/graphics/IOFramebuffer.h>
 #include <IOKit/pci/IOPCIDevice.h>
+#include <IOKit/IOBufferMemoryDescriptor.h>
 
 // Идентификатор карты (Ada AD104, RTX 4070 Super).
 #define MILCORIX_PCI_VENDOR   0x10DE
@@ -58,13 +59,19 @@ public:
     virtual const char * getPixelFormats(void) override;
 
 private:
-    IOPCIDevice     *fPci;        // провайдер
-    IOMemoryMap     *fBar0Map;    // маппинг регистров (BAR0)
-    volatile void   *fBar0;       // база регистров
-    IODeviceMemory  *fFbMem;      // scanout-апертура (VRAM/сис.память)
-    uint32_t         fWidth, fHeight, fPitch;   // текущий режим (из EDID)
+    IOPCIDevice          *fPci;        // провайдер
+    IOMemoryMap          *fBar0Map;    // маппинг регистров (BAR0)
+    volatile void        *fBar0;       // база регистров
+    IODeviceMemory       *fFbMem;      // scanout-апертура (VRAM/сис.память)
+    IOBufferMemoryDescriptor *fDmaBuf; // DMA-арена (физически непрерывная, IOMMU off)
+    void                 *fArenaVa;    // CPU-адрес арены
+    uint64_t              fArenaPhys;  // физ-адрес арены (= IOVA для GSP, IOMMU off)
+    uint64_t              fArenaSize;  // размер арены
+    uint32_t              fWidth, fHeight, fPitch;   // текущий режим (из EDID)
 
     bool  mapBars(void);
+    bool  allocDmaArena(void);    // выделить физически непрерывную DMA-арену
+    void  freeDmaArena(void);     // освободить DMA-арену
     bool  gspBringUp(void);       // слои 2–5 через переносимый core (nv_mmio_t)
     bool  modeset(uint32_t w, uint32_t h);  // GSP-modeset на режим
 };
