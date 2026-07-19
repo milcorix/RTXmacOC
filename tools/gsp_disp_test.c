@@ -347,11 +347,9 @@ static void test_edid_dtd_and_modeset(void)
     memset(pb, 0, sizeof(pb)); off = 0;
     nv_gsp_disp_build_core_modeset(pb, &off, &t, /*head*/0, /*sor*/0,
                                    NVC37D_SOR_PROTOCOL_SINGLE_TMDS_A);
-    CHECK(off == 13*8, "поток: 13 методов (3×viewport/5×raster/CTRL/2×pclk/PROCAMP/ORES; usage убран)");
-    /* порядок nv50_head_flush_set: view→mode→procamp→or. Первый — VIEWPORT_POINT_IN. */
+    CHECK(off == 11*8, "поток: 11 методов (3×viewport + 8×mode; OUTPUT_RESOURCE отдельно)");
+    /* порядок nv50_head_flush_set: view→mode. Первый — VIEWPORT_POINT_IN. */
     CHECK((ld32(pb+0) & 0x3ffc) == NVC37D_HEAD_SET_VIEWPORT_POINT_IN(0), "метод[0] == VIEWPORT_POINT_IN(0)");
-    /* последний — OUTPUT_RESOURCE (валидируется против режима, поэтому в конце). */
-    CHECK((ld32(pb+off-8) & 0x3ffc) == NVC37D_HEAD_SET_CONTROL_OUTPUT_RESOURCE(0), "последний == OUTPUT_RESOURCE(0)");
     /* найти RASTER_SIZE, PIXEL_CLOCK, HEAD_USAGE_BOUNDS в потоке */
     int found_raster = 0, found_pclk = 0;
     for (uint32_t o = 0; o < off; o += 8) {
@@ -397,7 +395,7 @@ static void test_window_image_and_update(void)
     uint8_t pb[256]; memset(pb, 0, sizeof(pb)); uint32_t off = 0;
     nv_gsp_disp_build_window_image(pb, &off, NVC37E_PARAMS_FORMAT_X8R8G8B8,
                                    1920, 1080, 7680, 0x14000000ull, NV_DISP_HANDLE_VRAM);
-    CHECK(off == 10*8, "window_image: 10 методов");
+    CHECK(off == 13*8, "window_image: 13 методов (10 surface + 3 композиция)");
     CHECK((ld32(pb+0) & 0x3ffc) == NVC37E_SET_PRESENT_CONTROL, "метод[0] == SET_PRESENT_CONTROL");
     int f_iso=0, f_off=0, f_pitch=0, f_params=0;
     for (uint32_t o = 0; o < off; o += 8) {

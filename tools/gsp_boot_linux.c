@@ -784,6 +784,15 @@ static int run(const nv_mmio_t *io, struct arena *ar, const char *bdf)
                 int src = nv_gsp_disp_get_supported(&ch, hcli, hdisp, &dmask, &dddc, &sst);
                 printf("СЛОЙ 5 A0: NUM_HEADS rc=%d status=0x%x heads=%u; GET_SUPPORTED rc=%d status=0x%x displayMask=0x%x DDC=0x%x\n",
                        hrc, hst, nheads, src, sst, dmask, dddc);
+                /* Маска ПРИГОДНЫХ голов (GET_ALL_HEAD_MASK). Если бит0 не выставлен —
+                   head0 нам недоступна (объясняет SOR ARM owner=0 + OUTPUT_RESOURCE INVALID_ARG). */
+                uint32_t hmask = 0, hmst = 0xffffffffu;
+                int hmrc = nv_gsp_disp_get_head_mask(&ch, hcli, hdisp, &hmask, &hmst);
+                printf("СЛОЙ 5 A0: GET_ALL_HEAD_MASK rc=%d status=0x%x headMask=0x%x %s\n",
+                       hmrc, hmst, hmask,
+                       (hmrc==NV_GSP_RM_OK && hmst==0) ? ((hmask & 1u) ? "(head0 доступна)"
+                                                                       : "★ head0 НЕДОСТУПНА — брать другую ★")
+                                                       : "(read fail)");
                 l5_disp_ok = (hrc==NV_GSP_RM_OK && hst==0 && src==NV_GSP_RM_OK && sst==0 &&
                               nheads > 0 && dmask != 0);
 
@@ -948,6 +957,15 @@ static int run(const nv_mmio_t *io, struct arena *ar, const char *bdf)
                                        mt.hsync_pos?"+":"-", mt.vsync_pos?"+":"-",
                                        md_did, md_proto, (int)md_sor);
                                 if (mprc == 0) {
+                                    /* HDMI-сигнализация ДО modeset (как nv50_hdmi_enable в
+                                       "Update output path"): без неё HDMI-монитор не активируется,
+                                       хотя TMDS идёт (симптом: моргает/"нет сигнала"). */
+                                    uint32_t hdst = 0xffffffffu;
+                                    int hdrc = nv_gsp_disp_set_hdmi_enable(&ch, hcli, hdisp, md_did, 1, &hdst);
+                                    printf("СЛОЙ 5 C.4e: SET_HDMI_ENABLE disp=0x%x rc=%d status=0x%x %s\n",
+                                           md_did, hdrc, hdst,
+                                           (hdrc==NV_GSP_RM_OK && hdst==0) ? "  ★ HDMI ВКЛ ★" : "  (не OK)");
+
                                     uint32_t head = 0;
                                     uint32_t wnd = 0;                 /* window-инстанс (owner head0) */
                                     uint32_t wnd_bit = 1u << wnd;     /* бит окна в SET_WINDOW_INTERLOCK_FLAGS */
@@ -962,10 +980,22 @@ static int run(const nv_mmio_t *io, struct arena *ar, const char *bdf)
 
                                     /* 2) ctx-dma NV_DMA_IN_MEMORY (весь VRAM, RDWR) — 24б дескриптор в
                                        inst-mem дисплея @disp_inst+0x1000 (после RAMHT). */
-                                    uint32_t desc_off = 0x1000u;
+                                    uint32_t desc_off = NV_DISP_CTXDMA_OFF;   /* 0x2000 — ПОСЛЕ RAMHT (0x2000 байт) */
                                     uint64_t desc_phys = disp_inst + desc_off;
+                                    /* ДИАГ: что GSP реально положил в disp_inst (RAMHT?) ДО наших записей.
+                                       Если тут не нули — GSP управляет своей структурой, и наш RAMHT@0 мимо. */
+                                    printf("СЛОЙ 5 C.4e ДАМП disp_inst ДО (через PRAMIN):\n");
+                                    for (uint32_t o = 0; o < 0x40; o += 0x10)
+                                        printf("  +0x%03x: %08x %08x %08x %08x\n", o,
+                                               nv_pramin_rd32(io,&win,disp_inst+o),   nv_pramin_rd32(io,&win,disp_inst+o+4),
+                                               nv_pramin_rd32(io,&win,disp_inst+o+8), nv_pramin_rd32(io,&win,disp_inst+o+12));
+                                    printf("  +0x1ff0: %08x %08x | +0x2000: %08x %08x (граница RAMHT[0x2000]/ctxdma)\n",
+                                           nv_pramin_rd32(io,&win,disp_inst+0x1ff0), nv_pramin_rd32(io,&win,disp_inst+0x1ff4),
+                                           nv_pramin_rd32(io,&win,disp_inst+0x2000), nv_pramin_rd32(io,&win,disp_inst+0x2004));
+
                                     uint8_t desc[NV_CTXDMA_DESC_SIZE];
-                                    nv_gsp_disp_build_ctxdma_desc(desc, 0, 0x2ffffffffull);
+                                    /* ctx-dma РОВНО на FB (start..start+size-1), SET_OFFSET=0. */
+                                    nv_gsp_disp_build_ctxdma_desc(desc, fb2, fb2 + fbsz - 1);
                                     for (unsigned i = 0; i < NV_CTXDMA_DESC_SIZE; i += 4)
                                         nv_pramin_wr32(io, &win, desc_phys + i,
                                                        (uint32_t)desc[i] | ((uint32_t)desc[i+1]<<8) |
@@ -1006,66 +1036,91 @@ static int run(const nv_mmio_t *io, struct arena *ar, const char *bdf)
                                            coff, coff/8u, coff, cget, p1done ? "GET==PUT (окна назначены)" : "GET!=PUT");
                                     l5_modeset_ok = p1done;
 
-                                    /* --- ФАЗА 2: SOR_SET_CONTROL + UPDATE (привязать SOR к голове) ---
-                                       ДО head OUTPUT_RESOURCE, иначе OUTPUT_RESOURCE→INVALID_ARG
-                                       (голова не владеет OR). Диагностика прогона #4 показала именно это. */
-                                    uint32_t cs2 = coff;
+                                    /* --- ФАЗА 2: АТОМАРНЫЙ modeset — SOR + head-конфиг + window в ОДНОМ
+                                       interlocked-коммите (как nouveau). Диагностика прогона #8 показала:
+                                       при раздельной привязке SOR его ARM-owner=0 (голова не подхватывалась) —
+                                       SOR-owner и конфиг головы должны коммититься АТОМАРНО. Порядок методов:
+                                       SOR → view → mode → OR (build_core_sor + build_core_modeset), затем
+                                       core_update(interlock окно0); window image + window_update(interlock core). */
+                                    /* ТОЛЬКО core (SOR+modeset), БЕЗ окна, interlock=0 → голова вверх сама.
+                                       Modeset и flip окна — разные операции; сначала поднимаем голову. */
+                                    uint32_t c2 = coff;
                                     nv_gsp_disp_build_core_sor(cs, &coff, md_sor, head, md_proto);
-                                    nv_gsp_disp_build_core_update(cs, &coff, 0u);
-                                    for (uint32_t i = cs2; i < coff; i += 4)
-                                        nv_pramin_wr32(io, &win, core_pb + i,
-                                                       (uint32_t)cs[i] | ((uint32_t)cs[i+1]<<8) |
-                                                       ((uint32_t)cs[i+2]<<16) | ((uint32_t)cs[i+3]<<24));
-                                    io->wr(io->ctx, core_user + 0x0, coff);
-                                    int psordone = 0;
-                                    for (int it = 0; it < 500; it++) {
-                                        cget = io->rd(io->ctx, core_user + 0x4);
-                                        if ((cget & 0xffcu) == (coff & 0xffcu)) { psordone = 1; break; }
-                                        bar_udelay(NULL, 1000);
-                                    }
-                                    printf("СЛОЙ 5 C.4d-ф2: SOR attach PUT=0x%x GET=0x%x %s\n",
-                                           coff, cget, psordone ? "GET==PUT (SOR привязан к head0)" : "GET!=PUT");
-
-                                    /* --- ФАЗА 3: head modeset (core) + image (window), UPDATE'ы СЦЕПЛЕНЫ.
-                                       Дописываем в те же пушбуферы (core с offset coff). core UPDATE ждёт окно0,
-                                       window UPDATE ждёт core → защёлкиваются вместе (атомарный modeset+flip). */
-                                    uint32_t c2 = coff;               /* старт фазы 3 в core-пушбуфере */
                                     nv_gsp_disp_build_core_modeset(cs, &coff, &mt, head, md_sor, md_proto);
-                                    nv_gsp_disp_build_core_update(cs, &coff, wnd_bit /*интерлок с окном0*/);
+                                    nv_gsp_disp_build_core_update(cs, &coff, 0u /*без окна*/);
                                     for (uint32_t i = c2; i < coff; i += 4)
                                         nv_pramin_wr32(io, &win, core_pb + i,
                                                        (uint32_t)cs[i] | ((uint32_t)cs[i+1]<<8) |
                                                        ((uint32_t)cs[i+2]<<16) | ((uint32_t)cs[i+3]<<24));
-                                    static uint8_t ws[256]; uint32_t woff = 0;
-                                    nv_gsp_disp_build_window_image(ws, &woff, NVC37E_PARAMS_FORMAT_X8R8G8B8,
-                                                                   w, h, pit, fb2, NV_DISP_HANDLE_VRAM);
-                                    nv_gsp_disp_build_window_update(ws, &woff, 1 /*интерлок с core*/);
-                                    for (uint32_t i = 0; i < woff; i += 4)
-                                        nv_pramin_wr32(io, &win, win_pb + i,
-                                                       (uint32_t)ws[i] | ((uint32_t)ws[i+1]<<8) |
-                                                       ((uint32_t)ws[i+2]<<16) | ((uint32_t)ws[i+3]<<24));
-                                    /* Бампнуть CORE PUT первым: core дойдёт до interlocked-UPDATE и будет
-                                       ЖДАТЬ окно0 (не коммитит один). Затем window PUT → окно доходит до
-                                       своего interlocked-UPDATE → рандеву, оба защёлкиваются атомарно.
-                                       (Порядок важен: если бампнуть window первым, оно коммитится в
-                                       одиночку до взвода core, и core потом ждёт несуществующий апдейт.) */
                                     io->wr(io->ctx, core_user + 0x0, coff);
-                                    io->wr(io->ctx, win_user  + 0x0, woff);
-                                    uint32_t wget = 0; int cdone = 0, wdone = 0;
-                                    for (int it = 0; it < 1000; it++) {
+                                    int cdone = 0;
+                                    for (int it = 0; it < 500; it++) {
                                         cget = io->rd(io->ctx, core_user + 0x4);
-                                        wget = io->rd(io->ctx, win_user  + 0x4);
-                                        cdone = ((cget & 0xffcu) == (coff & 0xffcu));
-                                        wdone = ((wget & 0xffcu) == (woff & 0xffcu));
-                                        if (cdone && wdone) break;
+                                        if ((cget & 0xffcu) == (coff & 0xffcu)) { cdone = 1; break; }
                                         bar_udelay(NULL, 1000);
                                     }
-                                    printf("СЛОЙ 5 C.4e-ф3: core modeset PUT=0x%x GET=0x%x %s; window %ux%u pit=%u поток=%u байт PUT=0x%x GET=0x%x %s\n",
-                                           coff, cget, cdone ? "GET==PUT" : "GET!=PUT",
-                                           w, h, pit, woff, woff, wget, wdone ? "GET==PUT" : "GET!=PUT");
-                                    if (cdone && wdone)
-                                        printf("СЛОЙ 5 C.4e: ★ INTERLOCKED MODESET+FLIP (оба GET==PUT) — БЕЛЫЙ ЭКРАН НА МОНИТОРЕ ★\n");
-                                    l5_scanout_ok = (cdone && wdone);
+                                    printf("СЛОЙ 5 C.4e-ф2: core SOR+modeset PUT=0x%x GET=0x%x %s (голова, без окна)\n",
+                                           coff, cget, cdone ? "GET==PUT" : "GET!=PUT");
+                                    l5_scanout_ok = cdone;
+
+                                    /* --- ФАЗА 3: OUTPUT_RESOURCE отдельным апдейтом ПОСЛЕ подъёма головы.
+                                       В одном коммите с modeset он валился INVALID_ARG (голова не активна).
+                                       Теперь голова сканирует → OR-формат должен приняться → физический
+                                       TMDS-сигнал на кабеле (без него монитор не ловит). */
+                                    {
+                                        uint32_t c3 = coff;
+                                        nv_gsp_disp_build_output_resource(cs, &coff, head,
+                                                                          mt.hsync_pos, mt.vsync_pos);
+                                        nv_gsp_disp_build_core_update(cs, &coff, 0u);
+                                        for (uint32_t i = c3; i < coff; i += 4)
+                                            nv_pramin_wr32(io, &win, core_pb + i,
+                                                           (uint32_t)cs[i] | ((uint32_t)cs[i+1]<<8) |
+                                                           ((uint32_t)cs[i+2]<<16) | ((uint32_t)cs[i+3]<<24));
+                                        io->wr(io->ctx, core_user + 0x0, coff);
+                                        uint32_t g3 = 0; int d3 = 0;
+                                        for (int it = 0; it < 500; it++) {
+                                            g3 = io->rd(io->ctx, core_user + 0x4);
+                                            if ((g3 & 0xffcu) == (coff & 0xffcu)) { d3 = 1; break; }
+                                            bar_udelay(NULL, 1000);
+                                        }
+                                        uint32_t ec3 = io->rd(io->ctx, 0x611020);
+                                        uint32_t sarm3 = io->rd(io->ctx, 0x688300u + (md_sor&3u)*0x20u);
+                                        uint32_t vl_a = io->rd(io->ctx, 0x616330);
+                                        bar_udelay(NULL, 20000);
+                                        uint32_t vl_b = io->rd(io->ctx, 0x616330);
+                                        printf("СЛОЙ 5 C.4e-ф3: OUTPUT_RESOURCE PUT=0x%x GET=0x%x %s; core-exc=0x%x (mthd=0x%x type=%u); SOR ARM=0x%x; vline 0x%x->0x%x %s\n",
+                                               coff, g3, d3 ? "GET==PUT" : "GET!=PUT", ec3, (ec3&0xfff)<<2, (ec3>>12)&0x7,
+                                               sarm3, vl_a, vl_b, (vl_b!=vl_a) ? "СКАНИРУЕТ" : "нет скана");
+                                    }
+
+                                    /* --- ФАЗА 4: ОТДЕЛЬНЫЙ flip окна (image+композиция) на уже поднятую
+                                       голову, interlock=0 (как обычный page-flip после modeset). Если голова
+                                       уже сканирует, а этот flip упадёт — голова останется, изолируем окно. */
+                                    {
+                                        static uint8_t ws[256]; uint32_t woff = 0;
+                                        nv_gsp_disp_build_window_image(ws, &woff, NVC37E_PARAMS_FORMAT_X8R8G8B8,
+                                                                       w, h, pit, 0 /*offset в ctx-dma=0*/, NV_DISP_HANDLE_VRAM);
+                                        nv_gsp_disp_build_window_update(ws, &woff, 0 /*standalone flip*/);
+                                        for (uint32_t i = 0; i < woff; i += 4)
+                                            nv_pramin_wr32(io, &win, win_pb + i,
+                                                           (uint32_t)ws[i] | ((uint32_t)ws[i+1]<<8) |
+                                                           ((uint32_t)ws[i+2]<<16) | ((uint32_t)ws[i+3]<<24));
+                                        io->wr(io->ctx, win_user + 0x0, woff);
+                                        uint32_t wg = 0; int wd = 0;
+                                        for (int it = 0; it < 500; it++) {
+                                            wg = io->rd(io->ctx, win_user + 0x4);
+                                            if ((wg & 0xffcu) == (woff & 0xffcu)) { wd = 1; break; }
+                                            bar_udelay(NULL, 1000);
+                                        }
+                                        uint32_t we = io->rd(io->ctx, 0x611020 + 1*12);
+                                        uint32_t vla = io->rd(io->ctx, 0x616330);
+                                        bar_udelay(NULL, 20000);
+                                        uint32_t vlb = io->rd(io->ctx, 0x616330);
+                                        printf("СЛОЙ 5 C.4e-ф4: window FLIP PUT=0x%x GET=0x%x %s; win-exc=0x%x (mthd=0x%x type=%u); vline 0x%x->0x%x %s\n",
+                                               woff, wg, wd ? "GET==PUT" : "GET!=PUT", we, (we&0xfff)<<2, (we>>12)&0x7,
+                                               vla, vlb, (vlb!=vla) ? "СКАНИРУЕТ" : "нет скана");
+                                        bar_udelay(NULL, 15000000);   /* 15с: разглядеть монитор */
+                                    }
 
                                     /* --- ДИАГНОСТИКА дисплея (gv100_disp): исключения каналов + супервизор ---
                                        Исключение канала chid: stat@0x611020+chid*12 (type[14:12], mthd[11:0]<<2),

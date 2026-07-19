@@ -20,6 +20,33 @@ int nv_gsp_disp_common_alloc(nv_gsp_rpc_chan *ch, uint32_t hClient, uint32_t hDe
     return rc;
 }
 
+int nv_gsp_disp_set_hdmi_enable(nv_gsp_rpc_chan *ch, uint32_t hClient, uint32_t hDispCommon,
+                                uint32_t displayId, int enable, uint32_t *status)
+{
+    if (!ch) return NV_GSP_RM_ERR_ARG;
+    uint8_t p[NV0073_SET_HDMI_ENABLE_PARAMS_SIZE];
+    for (unsigned i = 0; i < sizeof(p); i++) p[i] = 0;
+    st32(p + NV0073_SET_HDMI_DISPLAYID_OFF, displayId);
+    p[NV0073_SET_HDMI_ENABLE_OFF] = enable ? 1u : 0u;
+    return nv_gsp_rm_control(ch, hClient, hDispCommon,
+                             NV0073_CTRL_CMD_SPECIFIC_SET_HDMI_ENABLE, p, sizeof(p), status);
+}
+
+int nv_gsp_disp_get_head_mask(nv_gsp_rpc_chan *ch, uint32_t hClient, uint32_t hDispCommon,
+                              uint32_t *out_head_mask, uint32_t *status)
+{
+    if (!ch) return NV_GSP_RM_ERR_ARG;
+    uint8_t p[NV0073_HEAD_MASK_PARAMS_SIZE];
+    for (unsigned i = 0; i < sizeof(p); i++) p[i] = 0;
+    uint32_t st = 0xffffffffu;
+    int rc = nv_gsp_rm_control(ch, hClient, hDispCommon,
+                               NV0073_CTRL_CMD_SPECIFIC_GET_ALL_HEAD_MASK, p, sizeof(p), &st);
+    if (status) *status = st;
+    if (rc != NV_GSP_RM_OK) return rc;
+    if (out_head_mask) *out_head_mask = ld32(p + NV0073_HEAD_MASK_OFF);
+    return NV_GSP_RM_OK;
+}
+
 int nv_gsp_disp_get_active(nv_gsp_rpc_chan *ch, uint32_t hClient, uint32_t hDispCommon,
                            uint32_t head, uint32_t *out_display_id, uint32_t *status)
 {
@@ -286,18 +313,26 @@ void nv_gsp_disp_build_core_modeset(uint8_t *pb, uint32_t *off, const nv_edid_ti
     nv_gsp_disp_push_method(pb, off, NVC37D_HEAD_SET_RASTER_BLANK_START(head), hbs | (vbs << 16));
     nv_gsp_disp_push_method(pb, off, NVC37D_HEAD_SET_RASTER_VERT_BLANK2(head), 0u | (0u << 16) | 1u);
     nv_gsp_disp_push_method(pb, off, NVC37D_HEAD_SET_CONTROL_METH(head), NVC37D_HEAD_CONTROL_PROGRESSIVE);
+    /* HEAD_SET_DESKTOP_COLOR (0x2060) убран — RESERVED_METHOD на NVC77D (Ada). */
     nv_gsp_disp_push_method(pb, off, NVC37D_HEAD_SET_PIXEL_CLOCK_FREQUENCY(head),     hertz & 0x7fffffffu);
     nv_gsp_disp_push_method(pb, off, NVC37D_HEAD_SET_PIXEL_CLOCK_FREQUENCY_MAX(head), hertz & 0x7fffffffu);
-    /* HEAD_USAGE_BOUNDS убран: отвергается INVALID_ARG при любом значении (прогоны #6/#7),
-       nouveau сам помечает его "doesn't belong here". Требует output-LUT/cursor ctx-dma. */
+    /* HEAD_USAGE_BOUNDS/PROCAMP убраны (INVALID_ARG). ЭКСПЕРИМЕНТ: OUTPUT_RESOURCE тоже
+       временно убран — проверяем, сканирует ли голова на view+mode (raster+pclk). Если да —
+       OUTPUT_RESOURCE был ядом (вернём правильно). Если нет и без исключений — дело в
+       супервизоре/PLL GSP, не в методах. */
+    (void)0;
+}
 
-    /* --- procamp: RGB (headc37d_procamp: BLACK_LEVEL GRAPHICS[31:30]=2). --- */
-    nv_gsp_disp_push_method(pb, off, NVC37D_HEAD_SET_PROCAMP(head), (2u << 30));
-
-    /* --- or: output resource — полярности sync (NEGATIVE_TRUE=1 если не positive) + 24bpp. ПОСЛЕДНИМ. --- */
+void nv_gsp_disp_build_output_resource(uint8_t *pb, uint32_t *off, uint32_t head,
+                                       uint32_t hsync_pos, uint32_t vsync_pos)
+{
+    if (!pb || !off) return;
+    /* OUTPUT_RESOURCE: 24bpp + полярности sync (NEGATIVE_TRUE=1 если не positive).
+       Подаётся ОТДЕЛЬНЫМ апдейтом ПОСЛЕ подъёма головы — в одном коммите с modeset
+       валится INVALID_ARG (голова ещё не активна). */
     uint32_t ores = (NVC37D_ORESOURCE_PIXEL_DEPTH_BPP_24_444 << 4)
-                  | (t->hsync_pos ? 0u : (1u << 2))
-                  | (t->vsync_pos ? 0u : (1u << 3));
+                  | (hsync_pos ? 0u : (1u << 2))
+                  | (vsync_pos ? 0u : (1u << 3));
     nv_gsp_disp_push_method(pb, off, NVC37D_HEAD_SET_CONTROL_OUTPUT_RESOURCE(head), ores);
 }
 
@@ -359,6 +394,10 @@ void nv_gsp_disp_build_window_image(uint8_t *pb, uint32_t *off, uint32_t format,
     nv_gsp_disp_push_method(pb, off, NVC37E_SET_POINT_IN(0), 0u);
     nv_gsp_disp_push_method(pb, off, NVC37E_SET_SIZE_IN,  (w & 0x7fffu) | ((h & 0x7fffu) << 16));
     nv_gsp_disp_push_method(pb, off, NVC37E_SET_SIZE_OUT, (w & 0x7fffu) | ((h & 0x7fffu) << 16));
+    /* композиция: непрозрачное окно (nv50_wndw PIXEL_NONE: depth 255, K1=0xff, src=K1, dst=NEG_K1). */
+    nv_gsp_disp_push_method(pb, off, NVC37E_SET_COMPOSITION_CONTROL, NVC37E_COMPOSITION_CONTROL_VAL);
+    nv_gsp_disp_push_method(pb, off, NVC37E_SET_COMPOSITION_CONSTANT_ALPHA, NVC37E_CONST_ALPHA_K1);
+    nv_gsp_disp_push_method(pb, off, NVC37E_SET_COMPOSITION_FACTOR_SELECT, NVC37E_FACTOR_OPAQUE);
 }
 
 void nv_gsp_disp_build_window_update(uint8_t *pb, uint32_t *off, int interlock_with_core)

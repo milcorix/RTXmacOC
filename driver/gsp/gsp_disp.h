@@ -89,6 +89,7 @@
 #define NVC37D_HEAD_SET_HEAD_USAGE_BOUNDS(a)          (0x00002030u + (a)*0x400u)
 #define NVC37D_HEAD_SET_VIEWPORT_POINT_IN(a)          (0x00002048u + (a)*0x400u)
 #define NVC37D_HEAD_SET_RASTER_VERT_BLANK2(a)         (0x00002074u + (a)*0x400u)  /* blank2e<<16|blank2s (progressive: 0<<16|1) */
+#define NVC37D_HEAD_SET_DESKTOP_COLOR(a)              (0x00002060u + (a)*0x400u)  /* ALPHA[7:0]|RED[15:8]|GREEN[23:16]|BLUE[31:24] */
 /* HEAD_USAGE_BOUNDS: CURSOR[2:0], OUTPUT_LUT[5:4], UPSCALING_ALLOWED[8:8]. nouveau ставит
    CURSOR W256|OUTPUT_LUT 1025|UPSCALING (0x124), но это ТРЕБУЕТ выделенных cursor/output-LUT
    ctx-dma. Для чистого scanout окна используем МИНИМАЛЬНЫЕ границы (всё NONE=0) — иначе
@@ -125,6 +126,16 @@
 #define NVC37E_SET_SIZE_OUT            0x000002A4u   /* WIDTH[14:0]|HEIGHT[30:16] */
 #define NVC37E_SET_INTERLOCK_FLAGS     0x00000370u   /* WITH_CORE[0:0]|WITH_CURSOR(i)[i+1] */
 #define NVC37E_SET_WINDOW_INTERLOCK_FLAGS 0x00000374u
+/* Композиция окна (wndwc37e_blend_set) — без неё окно прозрачно (виден чёрный фон). */
+#define NVC37E_SET_COMPOSITION_CONTROL        0x000002ECu  /* COLOR_KEY_SELECT[?]|DEPTH[11:4] */
+#define NVC37E_SET_COMPOSITION_CONSTANT_ALPHA 0x000002F0u  /* K1[7:0] */
+#define NVC37E_SET_COMPOSITION_FACTOR_SELECT  0x000002F4u
+/* Непрозрачно (nv50_wndw PIXEL_NONE): SRC_COLOR[3:0]=K1(2), SRC_COLOR_NM[7:4]=K1(2),
+   DST_COLOR[11:8]=NEG_K1(4), DST_COLOR_NM[15:12]=NEG_K1(4), alpha-факторы[31:16]=0. */
+#define NVC37E_FACTOR_OPAQUE   (2u | (2u<<4) | (4u<<8) | (4u<<12))   /* 0x4422 */
+#define NVC37E_CONST_ALPHA_K1  0xffu   /* K1=0xff (alpha 1.0), K2=0 */
+/* CONTROL: COLOR_KEY_SELECT=DISABLE, DEPTH[11:4]=255 (нижний слой, 255-zpos для одиночного). */
+#define NVC37E_COMPOSITION_CONTROL_VAL  (255u << 4)   /* 0xFF0 */
 #define NVC37E_STORAGE_MEMORY_LAYOUT_PITCH  (1u << 4)
 #define NVC37E_PARAMS_FORMAT_X8R8G8B8   0xE6u   /* dword A/X,R,G,B (наш FB: 0x00RRGGBB) */
 #define NVC37E_PARAMS_FORMAT_A8R8G8B8   0xCFu
@@ -142,9 +153,14 @@
 /* RAMHT дисплея (nvkm_ramht): в первых 0x1000 inst-mem, запись 8б {handle@0, context@4};
    size=512 (bits=9). hash: XOR(handle по bits) ^ chid<<(bits-4). context = chid<<25 |
    (client&0x3fff) | (inst_offset << 9), где inst_offset — смещение дескриптора в inst-mem. */
-#define NV_DISP_RAMHT_BITS             9u
-#define NV_DISP_RAMHT_SIZE             512u
+/* RAMHT дисплея: gv100/Ada .ramht_size=0x2000 → 1024 записи, bits=10 (order_base_2(1024)).
+   НЕ 0x1000/512/9! (nvkm_ramht_new: size=0x2000, size>>3=0x400=1024, bits=order_base_2). */
+#define NV_DISP_RAMHT_BYTES            0x2000u
+#define NV_DISP_RAMHT_BITS             10u
+#define NV_DISP_RAMHT_SIZE             1024u
 #define NV_DISP_RAMHT_ENTRY            8u
+/* ctx-dma дескрипторы кладём ПОСЛЕ RAMHT (disp_inst+0x2000), не внутрь него. */
+#define NV_DISP_CTXDMA_OFF             0x2000u
 /* chid.user (disp_chan.c: user->user + id): core=0, window=1+head. */
 #define NV_DISP_CHID_CORE              0u
 #define NV_DISP_CHID_WINDOW(head)      (1u + (head))
@@ -194,6 +210,10 @@ int nv_edid_parse_dtd(const uint8_t *edid, uint32_t edid_len, nv_edid_timing *t)
  */
 void nv_gsp_disp_build_core_sor(uint8_t *pb, uint32_t *off, uint32_t sor,
                                 uint32_t head, uint32_t protocol);
+
+/* 5C.4e: OUTPUT_RESOURCE (24bpp + полярности) отдельным апдейтом ПОСЛЕ подъёма головы. */
+void nv_gsp_disp_build_output_resource(uint8_t *pb, uint32_t *off, uint32_t head,
+                                       uint32_t hsync_pos, uint32_t vsync_pos);
 
 /*
  * 5C.4c: собрать поток методов core-channel head-modeset в pb[*off] по таймингу t
@@ -269,6 +289,15 @@ void nv_gsp_disp_ramht_entry(uint32_t chid, uint32_t handle, uint32_t client,
 #define NV0073_CTRL_CMD_SYSTEM_GET_NUM_HEADS  0x730102u
 #define NV0073_CTRL_CMD_SYSTEM_GET_SUPPORTED  0x730120u
 #define NV0073_CTRL_CMD_SYSTEM_GET_ACTIVE     0x730126u
+#define NV0073_CTRL_CMD_SPECIFIC_GET_ALL_HEAD_MASK 0x730287u
+#define NV0073_CTRL_CMD_SPECIFIC_SET_HDMI_ENABLE   0x730273u
+/* NV0073_CTRL_SPECIFIC_SET_HDMI_ENABLE_PARAMS: {u8 subDev@0, u32 displayId@4, u8 enable@8} (12б). */
+#define NV0073_SET_HDMI_ENABLE_PARAMS_SIZE  12u
+#define NV0073_SET_HDMI_DISPLAYID_OFF        4u
+#define NV0073_SET_HDMI_ENABLE_OFF           8u
+/* NV0073_CTRL_SPECIFIC_GET_ALL_HEAD_MASK_PARAMS (8б): subDeviceInstance@0 headMask@4(OUT). */
+#define NV0073_HEAD_MASK_PARAMS_SIZE  8u
+#define NV0073_HEAD_MASK_OFF          4u
 /* NV0073_CTRL_SYSTEM_GET_ACTIVE_PARAMS (16б): subDeviceInstance@0 head@4 flags@8 displayId@12(OUT). */
 #define NV0073_GET_ACTIVE_PARAMS_SIZE   16u
 #define NV0073_GET_ACTIVE_HEAD_OFF       4u
@@ -328,6 +357,15 @@ void nv_gsp_disp_ramht_entry(uint32_t chid, uint32_t handle, uint32_t client,
  */
 int nv_gsp_disp_common_alloc(nv_gsp_rpc_chan *ch, uint32_t hClient, uint32_t hDevice,
                              uint32_t *out_disp, uint32_t *status);
+
+/* HDMI-сигнализация для displayId (SET_HDMI_ENABLE). Нужна, чтобы HDMI-приёмник поймал
+   сигнал (без неё TMDS идёт, но монитор не активируется). Порт r535_sor_hdmi_ctrl. */
+int nv_gsp_disp_set_hdmi_enable(nv_gsp_rpc_chan *ch, uint32_t hClient, uint32_t hDispCommon,
+                                uint32_t displayId, int enable, uint32_t *status);
+
+/* Маска доступных голов (GET_ALL_HEAD_MASK). Бит i = head i пригоден. Порт r535_disp_oneinit. */
+int nv_gsp_disp_get_head_mask(nv_gsp_rpc_chan *ch, uint32_t hClient, uint32_t hDispCommon,
+                              uint32_t *out_head_mask, uint32_t *status);
 
 /* Диагностика: displayId, который GSP считает АКТИВНЫМ на head (GET_ACTIVE). 0 = голова
    не активна (супервизор GSP не поднял modeset). Порт r535_disp_head_displayid. */
