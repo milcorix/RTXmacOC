@@ -19,13 +19,26 @@
 #include <stdint.h>
 #include "../../falcon_regs.h"
 
-/* Абстракция доступа к BAR0 + задержка. */
+/* Абстракция доступа к BAR0 + задержка + лог.
+ * Поле log — опциональный printf-совместимый колбэк (Linux даёт printf-обёртку,
+ * kext — IOLog). Добавлено В КОНЕЦ структуры: все инициализации nv_mmio_t —
+ * designated (.ctx=/.rd=/...), поэтому старый код без .log оставляет его NULL,
+ * а nv_log() при log==NULL молча ничего не делает. */
 typedef struct {
     void     *ctx;
     uint32_t (*rd)(void *ctx, uint32_t off);
     void     (*wr)(void *ctx, uint32_t off, uint32_t val);
     void     (*udelay)(void *ctx, uint32_t usec);
+    void     (*log)(void *ctx, const char *fmt, ...);
 } nv_mmio_t;
+
+/* Переносимое логирование оркестрации: если io->log задан — зовём его, иначе тихо.
+ * Позволяет вынести код из Linux-main (printf) в общий core без прямой зависимости
+ * от stdio (в ядре macOS его нет — там io->log = обёртка над IOLog). */
+#define nv_log(pio, ...) do { \
+    const nv_mmio_t *nv_log_io_ = (pio); \
+    if (nv_log_io_ && nv_log_io_->log) nv_log_io_->log(nv_log_io_->ctx, __VA_ARGS__); \
+} while (0)
 
 /* Цель DMA-копирования в память Falcon (falcon.rs FalconMem). */
 #define NV_FALCON_MEM_IMEM_SECURE    0

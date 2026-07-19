@@ -39,3 +39,12 @@ xcuserdata/
 tools/ЧИТАЙ-ПОСЛЕ-ВХОДА.txt
 tools/gmmu_test
 tools/gsp_disp_test
+
+# локальные артефакты/эксперименты (не для git)
+README.local.md
+opencode.json
+pl_x/
+probe/
+# пакет OpenCore/Root Patch с проприетарной прошивкой NVIDIA (правило 7)
+Tahoe_NVIDIA_Root_Patch.pkg
+Tahoe_NVIDIA_Root_Patch/

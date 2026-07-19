@@ -56,6 +56,7 @@ gsp-stage-test:
 #   make gsp-boot-linux && sudo ./tools/gsp_boot_linux   (прогон: tools/run-gsp-boot-detached.sh)
 gsp-boot-linux:
 	cc -Wall -Wextra -O2 tools/gsp_boot_linux.c tools/fw_blob_linux.c \
+	   driver/gsp/gsp_bringup.c \
 	   driver/gsp/falcon.c driver/gsp/fwsec_locate.c driver/gsp/fwsec_patch.c \
 	   driver/gsp/fb_layout.c driver/gsp/booter.c driver/gsp/gsp_fw.c driver/gsp/elf64.c \
 	   driver/gsp/gsp_rpc.c driver/gsp/gsp_rm.c driver/gsp/gmmu.c driver/gsp/gsp_fifo.c \

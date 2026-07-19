@@ -10,7 +10,17 @@
 #include <IOKit/IOLib.h>
 #include <IOKit/IODeviceMemory.h>
 #include <IOKit/IOBufferMemoryDescriptor.h>
+#include <IOKit/pci/IOPCIDevice.h>
+#include <stdarg.h>
+
+/* Переносимое ядро GSP — чистый C, компилируется как kernel-C. В C++-TU его
+   символы (nv_gsp_bringup и т.д.) нужно объявлять с C-линковкой, иначе clang++
+   ищет манглированное имя и линковка kext падает. */
+extern "C" {
 #include "../gsp/nv_dma.h"
+#include "../gsp/falcon.h"
+#include "../gsp/gsp_bringup.h"
+}
 
 #define super IOFramebuffer
 OSDefineMetaClassAndStructors(MilcorixFB, IOFramebuffer);
@@ -20,11 +30,23 @@ OSDefineMetaClassAndStructors(MilcorixFB, IOFramebuffer);
  * (Прототип nv_mmio_t — driver/gsp/*.h; тут показан контракт колбэков.)
  */
 static uint32_t mfb_rd(void *ctx, uint32_t off)
-{ return ((volatile uint32_t *)ctx)[off >> 2]; }
+{ return *(volatile uint32_t *)((volatile uint8_t *)ctx + off); }
 static void mfb_wr(void *ctx, uint32_t off, uint32_t val)
-{ ((volatile uint32_t *)ctx)[off >> 2] = val; }
+{ *(volatile uint32_t *)((volatile uint8_t *)ctx + off) = val; }
 static void mfb_udelay(void *ctx, uint32_t us)
 { (void)ctx; IODelay(us); }
+/* Трассировка оркестрации GSP → системный лог ядра. Core зовёт io->log в
+   printf-стиле; IOLogv принимает va_list и делает форматирование в ядре. */
+static void mfb_log(void *ctx, const char *fmt, ...)
+{ (void)ctx; va_list ap; va_start(ap, fmt); IOLogv(fmt, ap); va_end(ap); }
+
+/* Физ. база BAR по его config-регистру (для GspSystemInfo). getDeviceMemory* —
+   get-конвенция: возвращённый объект не наш, освобождать не нужно. */
+static uint64_t mfb_bar_phys(IOPCIDevice *pci, UInt8 reg)
+{
+    IODeviceMemory *m = pci->getDeviceMemoryWithRegister(reg);
+    return m ? (uint64_t)m->getPhysicalAddress() : 0;
+}
 
 bool MilcorixFB::mapBars(void)
 {
@@ -88,10 +110,37 @@ bool MilcorixFB::gspBringUp(void)
     // DMA-арена под весь bring-up (физически непрерывная, IOMMU off).
     if (!allocDmaArena()) return false;
 
-    // TODO(Фаза 0/1): вызвать переносимый core через nv_mmio_t{ctx=fBar0,...} и
-    // nv_dma_arena{va=fArenaVa, phys=fArenaPhys, size=fArenaSize}. Это логика
-    // tools/gsp_boot_linux.c: FWSEC-FRTS → staging GSP-RM → Booter → RPC → слои 3-5.
-    IOLog("MilcorixFB: gspBringUp — арена готова (TODO: оркестрация слоёв 2-5)\n");
+    // Переносимый оркестратор (driver/gsp/gsp_bringup.c): FWSEC-FRTS → staging
+    // GSP-RM → Booter → RPC → слои 3-5. Тот же код, что гоняет Linux-стенд;
+    // платформа даёт лишь колбэки (BAR0/задержка/лог), арену и PCI-инфо.
+    nv_mmio_t io;
+    io.ctx    = (void *)fBar0;
+    io.rd     = mfb_rd;
+    io.wr     = mfb_wr;
+    io.udelay = mfb_udelay;
+    io.log    = mfb_log;
+
+    // Арена: IOMMU выключен (DisableIoMapper=true), поэтому GPU видит физадрес,
+    // и физ-адрес буфера == IOVA для GSP (dma_addr = fArenaPhys).
+    nv_dma_arena_t arena;
+    nv_dma_arena_init(&arena, (uint8_t *)fArenaVa, fArenaPhys, fArenaSize);
+
+    // Физ. BAR/PCI-id для GspSystemInfo — из IOPCIDevice (аналог sysfs на Linux).
+    nv_gsp_pci_info_t pci;
+    pci.bar0 = mfb_bar_phys(fPci, kIOPCIConfigBaseAddress0);
+    pci.bar1 = mfb_bar_phys(fPci, kIOPCIConfigBaseAddress1);
+    pci.bar3 = mfb_bar_phys(fPci, kIOPCIConfigBaseAddress3);
+    // devid = (bus<<8)|(dev<<3)|fn — как build_sysinfo на Linux.
+    pci.devid = ((uint64_t)fPci->getBusNumber() << 8)
+              | (uint64_t)(((fPci->getDeviceNumber() & 0x1f) << 3) | (fPci->getFunctionNumber() & 7));
+
+    // Дамп libos-логов/shm нам в ядре некуда писать (нет FS) — не диагностируем.
+    int rc = nv_gsp_bringup(&io, &arena, &pci, /*dbg=*/nullptr);
+    if (rc != 0) {
+        IOLog("MilcorixFB: gspBringUp FAIL (rc=%d)\n", rc);
+        return false;
+    }
+    IOLog("MilcorixFB: gspBringUp OK — GSP-RM загружен, RISC-V active\n");
     return true;
 }
 

@@ -96,7 +96,6 @@ jobs:
           echo "OK: RTXProbe kext compiles"
 
       - name: Build kext MilcorixFB (IOFramebuffer, compile-check, layer 5)
-        continue-on-error: true
         run: |
           mkdir -p build
           SDK="$(xcrun --sdk macosx --show-sdk-path)"
@@ -110,6 +109,51 @@ jobs:
             -std=gnu++17 \
             -o build/MilcorixFB.o
           echo "OK: MilcorixFB kext compiles (IOFramebuffer available)"
+
+      - name: Build macOS firmware shim (compile-check, wall 2)
+        run: |
+          mkdir -p build
+          SDK="$(xcrun --sdk macosx --show-sdk-path)"
+          # Шим nv_fw_blob_get через BSD vnode API (файловый I/O из kext).
+          clang++ -x c++ -c driver/macos/fw_blob_macos.cpp \
+            -arch x86_64 \
+            -isysroot "$SDK" \
+            -I"$SDK/System/Library/Frameworks/Kernel.framework/Headers" \
+            -I"$SDK/System/Library/Frameworks/Kernel.framework/PrivateHeaders" \
+            -fapple-kext -fno-builtin -fno-exceptions -fno-rtti -fno-common \
+            -DKERNEL -DKERNEL_PRIVATE -DDRIVER_PRIVATE -DAPPLE -DNeXT \
+            -std=gnu++17 \
+            -o build/fw_blob_macos.o
+          echo "OK: fw_blob_macos (vnode firmware shim compiles)"
+
+      - name: Link full MilcorixFB kext (symbols resolve — walls 1-3 closed)
+        run: |
+          mkdir -p build
+          SDK="$(xcrun --sdk macosx --show-sdk-path)"
+          # Полная линковка kext: обвязка (MilcorixFB + fw_blob_macos) + ВЕСЬ
+          # переносимый core. Ловит нерешённые символы — доказывает, что
+          # оркестратор (стена 3) реально связан с nv_gsp_bringup, а прошивочный
+          # шим (стена 2) закрывает nv_fw_blob_get. -r = частичная линковка
+          # (kext грузится kextload, без обычного crt/main).
+          CORE_OBJ=""
+          for f in driver/gsp/*.c; do
+            o="build/core_$(basename "$f" .c).o"
+            clang -c "$f" -arch x86_64 -isysroot "$SDK" \
+              -I"$SDK/System/Library/Frameworks/Kernel.framework/Headers" \
+              -ffreestanding -fno-builtin -fno-common \
+              -DKERNEL -DKERNEL_PRIVATE -DAPPLE -std=gnu11 -o "$o"
+            CORE_OBJ="$CORE_OBJ $o"
+          done
+          ld -r -arch x86_64 \
+            build/MilcorixFB.o build/fw_blob_macos.o $CORE_OBJ \
+            -o build/MilcorixFB.kext.o
+          echo "=== undefined symbols (ожидаем только IOKit/Kernel KPI) ==="
+          nm -u build/MilcorixFB.kext.o | sort | tee build/undef.txt
+          # Не должно быть неопределённых nv_* (наши) — все закрыты обвязкой/core.
+          if nm -u build/MilcorixFB.kext.o | grep -q "_nv_"; then
+            echo "FAIL: остались неопределённые nv_* символы (обвязка неполна)"; exit 1
+          fi
+          echo "OK: kext линкуется, все nv_* символы разрешены (стены 1-3 замкнуты)"
 
       - name: Build portable GSP core as kernel C (compile-check, layers 2-5)
         run: |

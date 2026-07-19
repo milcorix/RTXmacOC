@@ -55,6 +55,21 @@ jobs:
           cc -Wall -Wextra -O2 tools/nv_mmio_linux.c -o build/nv_mmio_linux
           echo "OK: tools/nv_mmio_linux"
 
+      - name: Build full GSP bring-up harness (portable core + Linux platform)
+        run: |
+          # Полный линк: Linux-платформа (VFIO) + ПЕРЕНОСИМЫЙ оркестратор
+          # driver/gsp/gsp_bringup.c (слои 2-5, общий с kext). Ловит регрессии
+          # рефактора «вынести main-оркестрацию в core».
+          cc -Wall -Wextra -O2 \
+            tools/gsp_boot_linux.c tools/fw_blob_linux.c \
+            driver/gsp/gsp_bringup.c \
+            driver/gsp/falcon.c driver/gsp/fwsec_locate.c driver/gsp/fwsec_patch.c \
+            driver/gsp/fb_layout.c driver/gsp/booter.c driver/gsp/gsp_fw.c driver/gsp/elf64.c \
+            driver/gsp/gsp_rpc.c driver/gsp/gsp_rm.c driver/gsp/gmmu.c driver/gsp/gsp_fifo.c \
+            driver/gsp/gsp_disp.c \
+            -o build/gsp_boot_linux
+          echo "OK: tools/gsp_boot_linux (полный bring-up)"
+
       - name: Upload build artifacts
         if: always()
         uses: actions/upload-artifact@v4
