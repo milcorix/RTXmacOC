@@ -134,22 +134,51 @@ bool MilcorixFB::gspBringUp(void)
     pci.devid = ((uint64_t)fPci->getBusNumber() << 8)
               | (uint64_t)(((fPci->getDeviceNumber() & 0x1f) << 3) | (fPci->getFunctionNumber() & 7));
 
-    // Дамп libos-логов/shm нам в ядре некуда писать (нет FS) — не диагностируем.
-    int rc = nv_gsp_bringup(&io, &arena, &pci, /*dbg=*/nullptr);
+    // dbg=nullptr: (1) в ядре некуда дампить логи (нет FS), (2) отключает
+    // длинные диагностические паузы «разглядеть монитор» из core — под kext
+    // scanout гонит WindowServer, а секундные udelay повесили бы старт.
+    // scan: core вернёт геометрию реально запрограммированного scanout-FB.
+    nv_gsp_scanout_t scan;
+    int rc = nv_gsp_bringup(&io, &arena, &pci, /*dbg=*/nullptr, &scan);
     if (rc != 0) {
         IOLog("MilcorixFB: gspBringUp FAIL (rc=%d)\n", rc);
         return false;
     }
-    IOLog("MilcorixFB: gspBringUp OK — GSP-RM загружен, RISC-V active\n");
+
+    // Слой 5 замкнут в том же вызове: modeset+scanout на нативный режим из EDID.
+    // Подхватываем его геометрию для апертуры IOFramebuffer (без хардкода размеров).
+    if (scan.ok) {
+        fFbPhys = scan.fb_phys; fWidth = scan.width;
+        fHeight = scan.height;  fPitch = scan.pitch; fModeset = true;
+        IOLog("MilcorixFB: gspBringUp OK — GSP-RM active, scanout %ux%u pitch=%u fb=0x%llx\n",
+              fWidth, fHeight, fPitch, (unsigned long long)fFbPhys);
+    } else {
+        // GSP поднят, но modeset не состоялся (нет монитора/EDID) — держим дефолт.
+        IOLog("MilcorixFB: gspBringUp OK — GSP-RM active, но modeset не выполнен (нет EDID?)\n");
+    }
     return true;
 }
 
 bool MilcorixFB::modeset(uint32_t w, uint32_t h)
 {
-    // TODO(Фаза 0): GSP-modeset на режим wxh (build_core_sor/init/modeset + window image,
-    // interlocked update). Требует рабочей активации головы (супервизор GSP).
-    fWidth = w; fHeight = h; fPitch = w * 4u;
-    IOLog("MilcorixFB: modeset %ux%u pitch=%u (TODO: GSP supervisor)\n", w, h, fPitch);
+    // Слой 5 (modeset+scanout на нативный режим из EDID) уже выполнен внутри
+    // nv_gsp_bringup — единым потоком с загрузкой GSP-RM (переносимый core,
+    // driver/gsp/gsp_bringup.c). Отдельного re-modeset на произвольный wxh пока
+    // нет: перечисляем один режим (нативный), поэтому сюда приходит он же.
+    if (!fModeset) {
+        IOLog("MilcorixFB: modeset %ux%u — голова не поднята (bring-up без EDID)\n", w, h);
+        return false;
+    }
+    if (w != fWidth || h != fHeight) {
+        // Запрошен режим, отличный от запрограммированного нативного. Re-modeset
+        // на лету потребует вынести disp-поток из bring-up в отдельную функцию —
+        // пока не поддержано (getDisplayModes отдаёт единственный нативный режим).
+        IOLog("MilcorixFB: modeset %ux%u не поддержан (нативный %ux%u)\n",
+              w, h, fWidth, fHeight);
+        return false;
+    }
+    IOLog("MilcorixFB: modeset %ux%u pitch=%u fb=0x%llx (запрограммирован bring-up'ом)\n",
+          fWidth, fHeight, fPitch, (unsigned long long)fFbPhys);
     return true;
 }
 
@@ -162,12 +191,13 @@ bool MilcorixFB::start(IOService *provider)
     // Обнулить состояние (ivar'ы kext не гарантированно занулены).
     fBar0Map = nullptr; fBar0 = nullptr; fFbMem = nullptr;
     fDmaBuf = nullptr;  fArenaVa = nullptr; fArenaPhys = 0; fArenaSize = 0;
+    fFbPhys = MILCORIX_FB_VRAM_PHYS; fModeset = false;
 
     fPci->setMemoryEnable(true);
     fPci->setBusMasterEnable(true);   // GSP DMA читает арену из sysmem (BusMaster)
     if (!mapBars()) return false;
 
-    // Дефолтный режим до чтения EDID (переопределится в enableController/modeset).
+    // Дефолтный режим до чтения EDID (переопределится в gspBringUp по scan.ok).
     fWidth = 1280; fHeight = 1024; fPitch = fWidth * 4u;
 
     IOLog("MilcorixFB: start OK (RTX 4070S, milcorix-1.0)\n");
@@ -268,11 +298,12 @@ IOReturn MilcorixFB::setDisplayMode(IODisplayModeID, IOIndex)
 IODeviceMemory * MilcorixFB::getApertureRange(IOPixelAperture aperture)
 {
     if (aperture != kIOFBSystemAperture) return nullptr;
-    // Scanout-апертура: наш FB. На старте — VRAM-регион через BAR1 или сис.память.
-    // TODO(Фаза 1): вернуть IODeviceMemory на реальную scanout-память (pitch*height).
+    // Scanout-апертура = ровно тот FB во VRAM, что bring-up запрограммировал в
+    // core-channel (fFbPhys/fPitch/fHeight из scan). До modeset — дефолт
+    // MILCORIX_FB_VRAM_PHYS (совпадает с адресом, который выберет core).
     uint64_t len = (uint64_t)fPitch * fHeight;
     if (!fFbMem)
-        fFbMem = IODeviceMemory::withRange(MILCORIX_FB_VRAM_PHYS, len);
+        fFbMem = IODeviceMemory::withRange(fFbPhys, len);
     if (fFbMem) fFbMem->retain();
     return fFbMem;
 }

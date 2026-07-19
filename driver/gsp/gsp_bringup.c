@@ -153,8 +153,10 @@ static int exec_cpu_sequencer(struct seq_ctx *c, const uint32_t *cb, uint32_t cm
 
 /* ===================== главный прогон ===================== */
 int nv_gsp_bringup(const nv_mmio_t *io, nv_dma_arena_t *ar,
-               const nv_gsp_pci_info_t *pci, const nv_gsp_debug_t *dbg)
+               const nv_gsp_pci_info_t *pci, const nv_gsp_debug_t *dbg,
+               nv_gsp_scanout_t *scan)
 {
+    if (scan) { scan->fb_phys=0; scan->width=0; scan->height=0; scan->pitch=0; scan->ok=0; }
     uint32_t boot0 = io->rd(io->ctx,0x0);
     nv_log(io, "PMC_BOOT_0 = 0x%08x\n", boot0);
     if (nv_wait_gfw_boot_completed(io,4u*1000000u)!=NV_OK){nv_log(io,"FAIL: GFW boot\n");return -1;}
@@ -977,6 +979,13 @@ int nv_gsp_bringup(const nv_mmio_t *io, nv_dma_arena_t *ar,
                                            coff, cget, cdone ? "GET==PUT" : "GET!=PUT");
                                     l5_scanout_ok = cdone;
 
+                                    /* Отдать платформе геометрию запрограммированного scanout-FB
+                                       (kext строит по ней апертуру IOFramebuffer). */
+                                    if (scan && cdone) {
+                                        scan->fb_phys = fb2; scan->width = w;
+                                        scan->height = h;    scan->pitch = pit; scan->ok = 1;
+                                    }
+
                                     /* --- ФАЗА 3: OUTPUT_RESOURCE отдельным апдейтом ПОСЛЕ подъёма головы.
                                        В одном коммите с modeset он валился INVALID_ARG (голова не активна).
                                        Теперь голова сканирует → OR-формат должен приняться → физический
@@ -1033,7 +1042,7 @@ int nv_gsp_bringup(const nv_mmio_t *io, nv_dma_arena_t *ar,
                                         nv_log(io, "СЛОЙ 5 C.4e-ф4: window FLIP PUT=0x%x GET=0x%x %s; win-exc=0x%x (mthd=0x%x type=%u); vline 0x%x->0x%x %s\n",
                                                woff, wg, wd ? "GET==PUT" : "GET!=PUT", we, (we&0xfff)<<2, (we>>12)&0x7,
                                                vla, vlb, (vlb!=vla) ? "СКАНИРУЕТ" : "нет скана");
-                                        io->udelay(io->ctx, 15000000);   /* 15с: разглядеть монитор */
+                                        if (dbg) io->udelay(io->ctx, 15000000);   /* 15с: разглядеть монитор (только диаг-прогон) */
                                     }
 
                                     /* --- ДИАГНОСТИКА дисплея (gv100_disp): исключения каналов + супервизор ---
@@ -1085,8 +1094,9 @@ int nv_gsp_bringup(const nv_mmio_t *io, nv_dma_arena_t *ar,
                                                                                          : "GSP: голова НЕ активна");
                                     }
 
-                                    /* Дать монитору просинхронизироваться + показать кадр (видно на HDMI). */
-                                    io->udelay(io->ctx, 5000000);
+                                    /* Дать монитору просинхронизироваться + показать кадр (видно на HDMI).
+                                       Только диаг-прогон: под kext картинку гонит WindowServer, пауза не нужна. */
+                                    if (dbg) io->udelay(io->ctx, 5000000);
                                 }
                             }
                         }
@@ -1109,7 +1119,7 @@ int nv_gsp_bringup(const nv_mmio_t *io, nv_dma_arena_t *ar,
         uint8_t *logs[3] = {loginit_va, logintr_va, logrm_va};
         uint64_t put0[3];
         for (int k = 0; k < 3; k++) put0[k] = *(volatile uint64_t*)logs[k];
-        io->udelay(io->ctx, 2000000); /* 2с: растёт ли лог? (фолт-луп vs заморозка) */
+        if (dbg) io->udelay(io->ctx, 2000000); /* 2с: растёт ли лог? (фолт-луп vs заморозка) — только диаг */
         for (int k = 0; k < 3; k++) {
             uint64_t put = *(volatile uint64_t*)logs[k]; /* put-указатель @0 */
             nv_log(io, "ДИАГ: %-8s put=0x%llx (за 2с Δ=%lld)\n", names[k],

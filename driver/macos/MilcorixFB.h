@@ -68,6 +68,8 @@ private:
     uint64_t              fArenaPhys;  // физ-адрес арены (= IOVA для GSP, IOMMU off)
     uint64_t              fArenaSize;  // размер арены
     uint32_t              fWidth, fHeight, fPitch;   // текущий режим (из EDID)
+    uint64_t              fFbPhys;     // физ-адрес scanout-FB (из nv_gsp_bringup, слой 5)
+    bool                  fModeset;    // слой 5 реально запрограммирован (scan.ok)
 
     bool  mapBars(void);
     bool  allocDmaArena(void);    // выделить физически непрерывную DMA-арену

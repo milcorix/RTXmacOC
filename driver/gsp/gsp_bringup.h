@@ -30,15 +30,32 @@ typedef struct {
     void (*dump)(void *ctx, const char *name, const uint8_t *data, uint32_t len);
 } nv_gsp_debug_t;
 
+/* Итог слоя 5, который bring-up реально запрограммировал в железо: адрес и
+   геометрия scanout-FB (нативный режим из EDID). Kext берёт это для апертуры
+   IOFramebuffer (WindowServer), чтобы не хардкодить размеры. ok=0 → modeset не
+   состоялся (нет монитора/EDID) — поля не валидны. */
+typedef struct {
+    uint64_t fb_phys;   /* физ-адрес scanout-FB во VRAM */
+    uint32_t width;     /* активные пиксели по горизонтали */
+    uint32_t height;    /* активные пиксели по вертикали */
+    uint32_t pitch;     /* байт на строку (width*4, X8R8G8B8) */
+    int      ok;        /* 1 — modeset+scanout запрограммированы */
+} nv_gsp_scanout_t;
+
 /*
  * Полный bring-up GSP-RM: FWSEC-FRTS → staging → Booter → RPC → слои 3-5.
- *   io  — доступ к BAR0 (+ .log для трассировки, .udelay для задержек);
- *   ar  — DMA-арена ≥ NV_DMA_ARENA_SIZE, физически адресуемая GPU;
- *   pci — физ. BAR/PCI-id (может быть NULL);
- *   dbg — дамп-колбэк (может быть NULL).
+ *   io   — доступ к BAR0 (+ .log для трассировки, .udelay для задержек);
+ *   ar   — DMA-арена ≥ NV_DMA_ARENA_SIZE, физически адресуемая GPU;
+ *   pci  — физ. BAR/PCI-id (может быть NULL);
+ *   dbg  — дамп-колбэк И признак «диагностический прогон»: если !=NULL, bring-up
+ *          дампит логи и держит длинные паузы «разглядеть монитор» (Linux-стенд).
+ *          kext передаёт NULL — без дампов и без секундных задержек scanout;
+ *   scan — (опц., может быть NULL) заполняется геометрией запрограммированного
+ *          scanout-FB (см. nv_gsp_scanout_t).
  * Возврат: 0 — GSP-RM загружен и RISC-V active; <0 — провал (см. io->log).
  */
 int nv_gsp_bringup(const nv_mmio_t *io, nv_dma_arena_t *ar,
-                   const nv_gsp_pci_info_t *pci, const nv_gsp_debug_t *dbg);
+                   const nv_gsp_pci_info_t *pci, const nv_gsp_debug_t *dbg,
+                   nv_gsp_scanout_t *scan);
 
 #endif /* RTXMACOC_GSP_BRINGUP_H */
