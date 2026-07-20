@@ -183,6 +183,16 @@ jobs:
           done
           [ "$FAIL" -eq 0 ] && echo "ВЕСЬ CORE kernel-C компилируется" || echo "часть core не переносится (см. выше)"
 
+      - name: Build loadable MilcorixFB.kext bundle (ld -kext + bundle)
+        run: |
+          # Не compile-check, а НАСТОЯЩИЙ загружаемый артефакт: ld -kext
+          # (MH_KEXT_BUNDLE) + бандл Contents/{Info.plist,MacOS/MilcorixFB}.
+          # Скачивается из artifacts и ставится на стенд (kextload / OpenCore).
+          # Запуск требует железа RTX 4070S — здесь только линковка+упаковка.
+          tools/build_milcorixfb_kext.sh build
+          echo "=== структура бандла ==="
+          find build/MilcorixFB.kext -type f
+
       - name: Build dext RTXProbeDext (iig + compile-check)
         continue-on-error: true
         run: |
