@@ -49,13 +49,37 @@ for f in driver/gsp/*.c; do
     CORE_OBJ+=("$o")
 done
 
+# --- 2b. kmod_info: обязательная запись загрузчика kext'ов --------------------
+# Xcode генерирует её сам; при ручной сборке без неё kextload/kmutil падает
+# («kext has no kmod_info», rc=31). Структура связывает bundle-id с точками
+# входа, а libkmodc++ добавляет вызов конструкторов/деструкторов C++.
+cat > "$OUTDIR/kmod_info.c" <<'KMOD'
+#include <mach/mach_types.h>
+
+extern kern_return_t _start(kmod_info_t *ki, void *data);
+extern kern_return_t _stop(kmod_info_t *ki, void *data);
+
+__attribute__((visibility("default")))
+KMOD_EXPLICIT_DECL(dev.milcorix.MilcorixFB, "1.0.0", _start, _stop)
+
+__private_extern__ kmod_start_func_t *_realmain = 0;
+__private_extern__ kmod_stop_func_t  *_antimain = 0;
+__private_extern__ int _kext_apple_cc = __APPLE_CC__;
+KMOD
+clang -c "$OUTDIR/kmod_info.c" -arch "$ARCH" -isysroot "$SDK" -I"$KHDR" \
+      -fno-builtin -fno-common -DKERNEL -DKERNEL_PRIVATE -DAPPLE \
+      -o "$OUTDIR/kmod_info.o"
+
 # --- 3. Настоящая kext-линковка (MH_KEXT_BUNDLE) ------------------------------
 # `ld -kext`: KPI-символы (IOKit/libkern) остаются неопределёнными и резолвятся
 # при загрузке kextload'ом против запрошенных в Info.plist OSBundleLibraries.
 # Наши nv_*/C++ символы должны быть закрыты — иначе kext не загрузится.
+# -lkmodc++ / -lkmod дают _start/_stop, поднимающие статические C++-объекты.
 KEXTBIN="$OUTDIR/MilcorixFB.bin"
 ld -kext -arch "$ARCH" \
-   "$OUTDIR/MilcorixFB.o" "$OUTDIR/fw_blob_macos.o" "$OUTDIR/mfb_klog.o" "${CORE_OBJ[@]}" \
+   "$OUTDIR/MilcorixFB.o" "$OUTDIR/fw_blob_macos.o" "$OUTDIR/mfb_klog.o" \
+   "$OUTDIR/kmod_info.o" "${CORE_OBJ[@]}" \
+   -lkmodc++ -lkmod \
    -o "$KEXTBIN"
 
 # Санитарная проверка: неопределённых nv_* быть не должно (все закрыты обвязкой/core).
@@ -79,11 +103,18 @@ if ! /usr/libexec/PlistBuddy -c "Print :CFBundleExecutable" \
         "$BUNDLE/Contents/Info.plist"
 fi
 
+# Проверка наличия kmod_info — без неё kextload откажется грузить бандл.
+if ! nm "$BUNDLE/Contents/MacOS/MilcorixFB" | grep -q "_kmod_info"; then
+    echo "FAIL: в бинаре нет _kmod_info — kextload такой kext не примет"
+    exit 1
+fi
+
 echo "OK: собран $BUNDLE"
 echo "    тип бинаря: $(file -b "$BUNDLE/Contents/MacOS/MilcorixFB")"
+echo "    kmod_info:  есть"
 echo ""
 echo "Установка на целевом стенде (RTX 4070S, SIP off + AMFIPass):"
-echo "  sudo tools/install_milcorix_fw.sh          # разложить прошивки"
-echo "  sudo cp -R $BUNDLE /Library/Extensions/"
-echo "  sudo kmutil load -p /Library/Extensions/MilcorixFB.kext   # или kextload"
-echo "  log stream --predicate 'sender == \"MilcorixFB\"' --level debug"
+echo "  sudo tools/macos_install.sh          # прошивки + kext одной командой"
+echo ""
+echo "Драйвер по умолчанию ВЫКЛЮЧЕН. Включение — boot-arg milcorix=1 (проверка"
+echo "bring-up'а) или milcorix=2 (полный вывод); из Linux: tools/milcorix_stage.py"
