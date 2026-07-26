@@ -48,3 +48,8 @@ probe/
 # пакет OpenCore/Root Patch с проприетарной прошивкой NVIDIA (правило 7)
 Tahoe_NVIDIA_Root_Patch.pkg
 Tahoe_NVIDIA_Root_Patch/
+
+# Архивы переноса сессии с мака (b99c30bf-...zip и распакованный каталог) —
+# транзитные артефакты, не исходники. Содержимое, которое имело ценность,
+# перенесено в docs/macos-runbook.md.
+b99c30bf-*
