@@ -30,6 +30,24 @@
             <!-- RTX 4070 Super, Ada AD104: vendor 0x10DE, device 0x2783 -->
             <key>IOPCIMatch</key>
             <string>0x278310de</string>
+            <!--
+              Категория и приоритет матчинга.
+
+              Без IOMatchCategory мы оказывались в категории по умолчанию, а
+              штатный IONDRVFramebuffer — в своей («IOFramebuffer»), и на одном
+              и том же IOPCIDevice запускались ОБА: он поднимал IOBootNDRV поверх
+              EFI GOP и держал консоль, а мы работали вхолостую. Встаём в ту же
+              категорию, чтобы победитель был ровно один.
+
+              IOProbeScore 50000 бьёт catch-all IONDRVFramebuffer (score 0). Это
+              безопасно: если наш start() вернёт false, IOKit возьмёт следующего
+              кандидата — то есть IONDRVFramebuffer — и картинка вернётся на
+              EFI-фреймбуфер сама. Ровно тот запасной путь, который нам нужен.
+            -->
+            <key>IOMatchCategory</key>
+            <string>IOFramebuffer</string>
+            <key>IOProbeScore</key>
+            <integer>50000</integer>
         </dict>
     </dict>
     <key>OSBundleLibraries</key>

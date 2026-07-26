@@ -933,15 +933,20 @@ int nv_gsp_bringup(const nv_mmio_t *io, nv_dma_arena_t *ar,
                                     /* 1) FB под нативное разрешение (из EDID) — сплошной БЕЛЫЙ
                                        (X8R8G8B8 0x00ffffff): на чёрном "нет сигнала" белый экран
                                        = однозначно наши пиксели. */
-                                    if (fb_va) {
-                                        /* Есть прямой CPU-доступ (системная память либо окно BAR1). */
+                                    if (!fb_from_platform) {
+                                        /* Диагностический прогон (Linux-стенд): FB во VRAM,
+                                           заливаем через PRAMIN. */
+                                        nv_pramin_fill(io, &win, fb2, (uint32_t)fbsz, 0x00ffffffu);
+                                    } else if (dbg && fb_va) {
                                         volatile uint32_t *px = (volatile uint32_t *)fb_va;
                                         uint64_t n = fbsz >> 2;
                                         for (uint64_t i = 0; i < n; i++) px[i] = 0x00ffffffu;
-                                    } else {
-                                        nv_pramin_fill(io, &win, fb2, (uint32_t)fbsz, 0x00ffffffu);
                                     }
-                                    (void)fb_from_platform;
+                                    /* Под ОС заливку НЕ делаем: (1) 8 МиБ записей в
+                                       некэшируемое окно BAR1 добавили бы секунды к старту
+                                       драйвера, (2) в режиме BAR1 буфер — это тот же буфер
+                                       консоли EFI, и стирать его значит на ровном месте
+                                       погасить картинку. Первый кадр нарисует композитор. */
 
                                     /* 2) ctx-dma NV_DMA_IN_MEMORY (весь VRAM, RDWR) — 24б дескриптор в
                                        inst-mem дисплея @disp_inst+0x1000 (после RAMHT). */

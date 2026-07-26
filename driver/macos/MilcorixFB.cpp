@@ -14,6 +14,7 @@
 #include <IOKit/IODeviceMemory.h>
 #include <IOKit/IOBufferMemoryDescriptor.h>
 #include <IOKit/pci/IOPCIDevice.h>
+#include <IOKit/IOPlatformExpert.h>
 #include <pexpert/pexpert.h>
 #include <stdarg.h>
 
@@ -182,6 +183,37 @@ bool MilcorixFB::probeBar1Identity(uint64_t vramOff, uint64_t len)
 }
 
 /*
+ * consoleFbOffsetInBar1 — где внутри BAR1 лежит консольный буфер, который
+ * оставил UEFI GOP.
+ *
+ * Это не догадка: штатный «немой» фреймбуфер macOS (IOBootNDRV) берёт ровно
+ * этот адрес — `PE_state.video.v_baseAddr` с обнулёнными двумя младшими битами —
+ * и ищет BAR, в диапазон которого он попадает. Значит и мы получаем точное
+ * смещение, а не предположение «наверное, ноль». Возврат ~0 — адрес недоступен
+ * или лежит вне BAR1.
+ */
+uint64_t MilcorixFB::consoleFbOffsetInBar1(void)
+{
+    IOPlatformExpert *pe = getPlatform();
+    if (!pe || !fBar1Phys || !fBar1Len) return ~0ull;
+
+    PE_Video info;
+    bzero(&info, sizeof(info));
+    if (pe->getConsoleInfo(&info) != kIOReturnSuccess) return ~0ull;
+
+    uint64_t base = (uint64_t)info.v_baseAddr & ~3ull;   /* младшие биты — флаги */
+    if (!base || base < fBar1Phys) return ~0ull;
+    uint64_t off = base - fBar1Phys;
+    if (off >= fBar1Len) return ~0ull;
+
+    mfb_log(nullptr, "MilcorixFB: консоль EFI @phys=0x%llx = BAR1+0x%llx, %lux%lu pitch=%lu bpp=%lu\n",
+            (unsigned long long)base, (unsigned long long)off,
+            (unsigned long)info.v_width, (unsigned long)info.v_height,
+            (unsigned long)info.v_rowBytes, (unsigned long)info.v_depth);
+    return off;
+}
+
+/*
  * allocDmaArena — физически непрерывная арена под весь bring-up (fwimage ~36 МиБ +
  * radix3 + bootloader + libos-логи + shm + rmargs). IOMMU выключен
  * (DisableIoMapper=true в OpenCore), поэтому GPU видит ФИЗИЧЕСКИЙ адрес → буфер
@@ -256,7 +288,12 @@ int MilcorixFB::allocScanoutFb(uint32_t w, uint32_t h, uint32_t pitch,
        отображено в BAR1. Заодно приятное свойство: если наш modeset не
        состоится, по этому адресу продолжит сканироваться консоль EFI. */
     if (fFbMode != MILCORIX_FBMODE_SYSMEM && fBar1) {
-        const uint64_t kVramOff = 0;
+        uint64_t kVramOff = consoleFbOffsetInBar1();
+        if (kVramOff == ~0ull) {
+            /* Платформа адрес не дала — пробуем начало окна: UEFI GOP кладёт
+               консоль в начало VRAM, и IOBootNDRV рассчитывает на то же. */
+            kVramOff = 0;
+        }
         if (probeBar1Identity(kVramOff, bytes)) {
             fFbGpuAddr       = kVramOff;
             fFbTarget        = NV_CTXDMA_TARGET_VRAM;
@@ -537,16 +574,6 @@ void MilcorixFB::stop(IOService *provider)
     super::stop(provider);
 }
 
-IOReturn MilcorixFB::enableController(void)
-{
-    /* Железо уже поднято в start() — сюда мы доходим только когда есть годный
-       scanout в системной памяти. Остаётся подтвердить готовность. */
-    MFB_TRACE_ONCE("enableController — IOGraphics поднимает фреймбуфер");
-    mfb_klog_flush_lazy();
-    if (!fModeset || !fApertureCpuPhys) return kIOReturnNotReady;
-    return kIOReturnSuccess;
-}
-
 // --- Перечисление режимов (один — нативный из EDID) ---
 IOItemCount MilcorixFB::getDisplayModeCount(void)
 {
@@ -629,30 +656,15 @@ IODeviceMemory * MilcorixFB::getApertureRange(IOPixelAperture aperture)
         IOLog("MilcorixFB: getApertureRange — CPU-апертуры нет, отказ\n");
         return nullptr;
     }
-    uint64_t len = (uint64_t)fPitch * fHeight;
+    /* Длина должна быть НЕ МЕНЬШЕ bytesPerRow*activeHeight, иначе IOGraphics
+       молча отвергает апертуру («VENDOR_BUG: length insufficient»). Штатный
+       IONDRVFramebuffer отдаёт с запасом в 128 байт — делаем так же. */
+    uint64_t len = (uint64_t)fPitch * fHeight + 128ull;
     if (len > fApertureLen) len = fApertureLen;
     if (!fFbMem)
         fFbMem = IODeviceMemory::withRange(fApertureCpuPhys, len);
     if (fFbMem) fFbMem->retain();
     return fFbMem;
-}
-
-IOReturn MilcorixFB::getAttributeForConnection(IOIndex, IOSelect attribute, uintptr_t *value)
-{
-    switch (attribute) {
-        case kConnectionEnable:      if (value) *value = 1; return kIOReturnSuccess;
-        case kConnectionFlags:       if (value) *value = kIOConnectionBuiltIn; return kIOReturnSuccess;
-        case kConnectionSupportsHLDDCSense:
-            return fEdidOk ? kIOReturnSuccess : kIOReturnUnsupported;
-        default: return super::getAttributeForConnection(0, attribute, value);
-    }
-}
-
-IOReturn MilcorixFB::setAttributeForConnection(IOIndex, IOSelect attribute, uintptr_t value)
-{
-    MFB_TRACE_ONCE("setAttributeForConnection — монитор подключён к нам");
-    mfb_klog_flush_lazy();
-    return super::setAttributeForConnection(0, attribute, value);
 }
 
 /* --- EDID для IOGraphics: монитор должен опознаться, иначе система подставит
@@ -674,11 +686,47 @@ bool MilcorixFB::hasDDCConnect(IOIndex connectIndex)
  */
 bool MilcorixFB::isConsoleDevice(void)
 {
-    bool base = super::isConsoleDevice();
+    /* Базовый IOFramebuffer::isConsoleDevice() возвращает false — то есть кто
+       НЕ переопределил этот метод, тот консоль и не получает. Поэтому все
+       «немые» фреймбуферы (IOBootNDRV, AppleBochVGAFB, MacHyperVFramebuffer)
+       его переопределяют. Мы единственный фреймбуфер этой карты и сами
+       программируем её вывод — значит консоль наша. */
     bool prop = (fPci && fPci->getProperty("AAPL,boot-display") != nullptr);
-    MFB_TRACE_ONCE("isConsoleDevice -> %d (AAPL,boot-display у PCI: %d)",
-                   (int)base, (int)prop);
-    return base;
+    MFB_TRACE_ONCE("isConsoleDevice -> 1 (AAPL,boot-display у PCI: %d)", (int)prop);
+    return true;
+}
+
+/*
+ * setAttribute — важен ровно один селектор. IOFramebuffer::close() шлёт
+ * kIOWindowServerActiveAttribute со значением kIOWSAA_Unaccelerated (0), и его
+ * надо принять: это штатный режим «рисует CPU, GPU не участвует», ровно наш
+ * случай. Остальное отдаём базовому классу.
+ */
+IOReturn MilcorixFB::setAttribute(IOSelect attribute, uintptr_t value)
+{
+    if (attribute == kIOWindowServerActiveAttribute) {
+        MFB_TRACE_ONCE("WindowServer подключился (kIOWindowServerActive=%lu)",
+                       (unsigned long)value);
+        mfb_klog_flush_lazy();
+        return kIOReturnSuccess;
+    }
+    return super::setAttribute(attribute, value);
+}
+
+/*
+ * Гамма и палитра: аппаратной таблицы у нас (пока) нет, но отказ на этих
+ * вызовах IOGraphics трактует как неисправность. Формат у нас всегда
+ * 32-битный direct-color, палитра не используется — принимаем и игнорируем.
+ */
+IOReturn MilcorixFB::setGammaTable(UInt32, UInt32, UInt32, void *)
+{
+    MFB_TRACE_ONCE("setGammaTable — принято (аппаратной гаммы нет)");
+    return kIOReturnSuccess;
+}
+
+IOReturn MilcorixFB::setCLUTWithEntries(IOColorEntry *, UInt32, UInt32, IOOptionBits)
+{
+    return kIOReturnSuccess;
 }
 
 IOReturn MilcorixFB::getDDCBlock(IOIndex connectIndex, UInt32 blockNumber,

@@ -14,9 +14,10 @@
  *    в getApertureRange НЕЛЬЗЯ: там он трактуется как ФИЗИЧЕСКИЙ адрес хоста, и
  *    WindowServer начинает писать пиксели в чужую системную память — чёрный экран
  *    плюс тихая порча RAM (именно так был убит dyld-кэш и получен boot-loop
- *    «Bad CPU type in executable»). Поэтому в macOS scanout-FB живёт в СИСТЕМНОЙ
- *    памяти, а дисплей читает его по PCIe (ctx-dma TARGET=SYSMEM). Апертура
- *    отдаётся ТОЛЬКО когда fFbSysmem==true.
+ *    «Bad CPU type in executable»). Поэтому CPU-адрес апертуры kext считает САМ
+ *    (fApertureCpuPhys) — либо это окно BAR1, через которое VRAM видна процессору,
+ *    либо буфер в системной памяти. Адрес, вернувшийся из ядра GSP, в апертуру
+ *    не попадает никогда.
  *
  * 2. ДРАЙВЕР ДОЛЖЕН УМЕТЬ НЕ ЗАПУСКАТЬСЯ. Драйвер дисплея, падающий на boot'е,
  *    превращает машину в кирпич без обратной связи. Поэтому активность задаётся
@@ -73,8 +74,18 @@ public:
     virtual bool     start(IOService *provider) override;
     virtual void     stop(IOService *provider) override;
 
+    /*
+     * ВАЖНО: enableController СОЗНАТЕЛЬНО НЕ переопределён.
+     *
+     * IOFramebuffer помечает фреймбуфер как `dead`, если enableController вернул
+     * что-либо кроме успеха — а мёртвый фреймбуфер это гарантированный чёрный
+     * экран. Проверять готовность здесь незачем: железо поднимается в start(), и
+     * фреймбуфером мы становимся только когда всё готово. Штатный
+     * AppleBochVGAFB (единственный прямой subclass IOFramebuffer, который Apple
+     * сама поставляет для Intel в Sequoia) этот метод тоже не переопределяет.
+     */
+
     // --- IOFramebuffer: перечисление/выбор режима (из EDID) ---
-    virtual IOReturn enableController(void) override;
     virtual UInt64   getPixelFormatsForDisplayMode(IODisplayModeID displayMode,
                                                    IOIndex depth) override;
     virtual IOItemCount getDisplayModeCount(void) override;
@@ -91,14 +102,26 @@ public:
     // --- IOFramebuffer: апертура scanout-буфера ---
     virtual IODeviceMemory * getApertureRange(IOPixelAperture aperture) override;
 
-    // --- IOFramebuffer: коннектор + EDID ---
-    virtual IOReturn getAttributeForConnection(IOIndex connectIndex,
-                                               IOSelect attribute, uintptr_t *value) override;
-    virtual IOReturn setAttributeForConnection(IOIndex connectIndex,
-                                               IOSelect attribute, uintptr_t value) override;
     virtual const char * getPixelFormats(void) override;
-    virtual bool     hasDDCConnect(IOIndex connectIndex) override;
+
+    /*
+     * get/setAttributeForConnection тоже НЕ переопределяем. Причина конкретная:
+     * IOFramebuffer::updateOnline() считает фреймбуфер ОФФЛАЙНОВЫМ, если запрос
+     * kConnectionCheckEnable вернул успех со значением 0. Ошибка (или
+     * «не поддерживаю») трактуется как «онлайн», то есть безопаснее. Апертуру
+     * это не затрагивает, а риск потерять рабочий стол убирает.
+     */
+
+    // --- Консоль и «немой» фреймбуфер ---
     virtual bool     isConsoleDevice(void) override;
+    virtual IOReturn setAttribute(IOSelect attribute, uintptr_t value) override;
+    virtual IOReturn setGammaTable(UInt32 channelCount, UInt32 dataCount,
+                                   UInt32 dataWidth, void *data) override;
+    virtual IOReturn setCLUTWithEntries(IOColorEntry *colors, UInt32 index,
+                                        UInt32 numEntries, IOOptionBits options) override;
+
+    // --- EDID активного монитора ---
+    virtual bool     hasDDCConnect(IOIndex connectIndex) override;
     virtual IOReturn getDDCBlock(IOIndex connectIndex, UInt32 blockNumber,
                                  IOSelect blockType, IOOptionBits options,
                                  UInt8 *data, IOByteCount *length) override;
@@ -150,6 +173,7 @@ private:
     void  freeDmaArena(void);     // освободить DMA-арену
     void  freeScanoutFb(void);    // освободить scanout-FB
     bool  probeBar1Identity(uint64_t vramOff, uint64_t len);  // живо ли identity-окно BAR1
+    uint64_t consoleFbOffsetInBar1(void);   // где EFI GOP оставил консольный буфер
     void  teardown(void);         // отпустить ресурсы хоста (арену — только если GSP не запущен)
     bool  gspBringUp(void);       // слои 2–5 через переносимый core (nv_mmio_t)
     bool  modeset(uint32_t w, uint32_t h);  // GSP-modeset на режим
