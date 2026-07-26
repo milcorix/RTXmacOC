@@ -1024,6 +1024,8 @@ int nv_gsp_bringup(const nv_mmio_t *io, nv_dma_arena_t *ar,
                                                        ((uint32_t)cs[i+2]<<16) | ((uint32_t)cs[i+3]<<24));
                                     io->wr(io->ctx, core_user + 0x0, coff);
                                     int cdone = 0;
+                                    /* Доказательства реального скана — заполняются диагностикой ниже. */
+                                    int hw_scanning = 0, hw_or_active = 0;
                                     for (int it = 0; it < 500; it++) {
                                         cget = io->rd(io->ctx, core_user + 0x4);
                                         if ((cget & 0xffcu) == (coff & 0xffcu)) { cdone = 1; break; }
@@ -1033,11 +1035,16 @@ int nv_gsp_bringup(const nv_mmio_t *io, nv_dma_arena_t *ar,
                                            coff, cget, cdone ? "GET==PUT" : "GET!=PUT");
                                     l5_scanout_ok = cdone;
 
-                                    /* Отдать платформе геометрию запрограммированного scanout-FB
-                                       (kext строит по ней апертуру IOFramebuffer). */
+                                    /* Геометрию запоминаем сразу, но scan->ok НЕ выставляем.
+                                       GET==PUT означает лишь «сабмит проглочен», а не «пиксели
+                                       идут на монитор». Если отдать апертуру по этому признаку,
+                                       ОС заберёт дисплей у рабочего EFI-фреймбуфера и получит
+                                       чёрный экран. Признак успеха ставится в самом конце — по
+                                       фактическому состоянию железа (голова сканирует + OR
+                                       активен), см. ниже. */
                                     if (scan && cdone) {
                                         scan->fb_phys = fb2; scan->width = w;
-                                        scan->height = h;    scan->pitch = pit; scan->ok = 1;
+                                        scan->height = h;    scan->pitch = pit;
                                         scan->fb_target = fb_target;
                                         if (md_edid_ok) {
                                             for (unsigned e = 0; e < sizeof(scan->edid); e++)
@@ -1126,6 +1133,7 @@ int nv_gsp_bringup(const nv_mmio_t *io, nv_dma_arena_t *ar,
                                         nv_log(io, "СЛОЙ 5 C.4e ДИАГ: SUPERVISOR 0x611c30=0x%x (pending&0x7=0x%x %s); exc_other 0x611854=0x%x; head0 vline 0x%x->0x%x %s\n",
                                                sv, sv & 0x7u, (sv & 0x7u) ? "SV ВИСИТ (никто не обслужил!)" : "нет SV",
                                                exo, vl0, vl1, (vl1 != vl0) ? "СКАНИРУЕТ" : "не сканирует");
+                                        hw_scanning = (vl1 != vl0);
                                         /* Состояние SOR прямо из BAR0 (gv100_sor_state): ASY (assembly,
                                            заданное методами) @0x680300+sor*0x20; ARM (закоммиченное
                                            супервизором) @0x688300+sor*0x20. Поля: proto_evo[11:8]
@@ -1141,6 +1149,7 @@ int nv_gsp_bringup(const nv_mmio_t *io, nv_dma_arena_t *ar,
                                                sor_arm, (sor_arm>>8)&0xf, sor_arm&0xff,
                                                ((sor_arm & 0xff) || ((sor_arm>>8)&0xf)) ? "OR АКТИВЕН (супервизор закоммитил)"
                                                                                         : "OR НЕ активен (ARM пуст)");
+                                        hw_or_active = ((sor_arm & 0xff) || ((sor_arm>>8)&0xf)) ? 1 : 0;
                                         /* head0 armed raster (0x616330 vline уже читали); дополнительно
                                            control-state головы: 0x616300 (owner/status). */
                                         uint32_t hctl = io->rd(io->ctx, 0x616300u);
@@ -1152,6 +1161,24 @@ int nv_gsp_bringup(const nv_mmio_t *io, nv_dma_arena_t *ar,
                                                arc2, ast2, act,
                                                (arc2==NV_GSP_RM_OK && ast2==0 && act!=0) ? "GSP СЧИТАЕТ ГОЛОВУ АКТИВНОЙ"
                                                                                          : "GSP: голова НЕ активна");
+                                    }
+
+                                    /* --- ПРИЁМКА СЛОЯ 5 ПО ФАКТУ, А НЕ ПО САБМИТУ ---
+                                       Апертуру отдаём ОС только если железо подтверждает вывод:
+                                       голова реально сканирует (vline растёт) и выходной ресурс
+                                       закоммичен супервизором (SOR ARM не пуст). Иначе честно
+                                       говорим «не вышло»: ОС не станет забирать дисплей, а
+                                       пользователь останется с рабочим EFI-фреймбуфером вместо
+                                       чёрного экрана. */
+                                    if (scan && cdone) {
+                                        if (hw_scanning && hw_or_active) {
+                                            scan->ok = 1;
+                                            nv_log(io, "*** СЛОЙ 5: ВЫВОД ПОДТВЕРЖДЁН ЖЕЛЕЗОМ (голова сканирует, OR активен) — апертура будет отдана ОС ***\n");
+                                        } else {
+                                            scan->ok = 0;
+                                            nv_log(io, "*** СЛОЙ 5: сабмит прошёл, но вывода НЕТ (скан=%d, OR=%d) — апертуру НЕ отдаём, вывод остаётся за прошивкой ***\n",
+                                                   hw_scanning, hw_or_active);
+                                        }
                                     }
 
                                     /* Дать монитору просинхронизироваться + показать кадр (видно на HDMI).
