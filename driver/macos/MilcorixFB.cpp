@@ -118,7 +118,10 @@ bool MilcorixFB::mapBars(void)
  * PRAMIN и смотрим, видно ли её по BAR1 на том же смещении. Проверяем оба конца
  * диапазона: начало страницы может быть отображено, а хвост — уже нет.
  *
- * Состояние восстанавливается: исходные слова считываются и кладутся назад.
+ * Состояние восстанавливается дважды: исходные слова кладутся назад, И регистр
+ * окна PRAMIN (0x1700) возвращается в прежнее положение. Второе — обязательно:
+ * оркестратор кэширует базу окна в своей переменной, и если подвинуть окно у
+ * него за спиной, все его последующие обращения уйдут не по тем адресам.
  */
 bool MilcorixFB::probeBar1Identity(uint64_t vramOff, uint64_t len)
 {
@@ -133,14 +136,17 @@ bool MilcorixFB::probeBar1Identity(uint64_t vramOff, uint64_t len)
     nv_mmio_t io;
     io.ctx = (void *)fBar0; io.rd = mfb_rd; io.wr = mfb_wr;
     io.udelay = mfb_udelay; io.log = mfb_log;
-    uint64_t win = ~0ull;   /* окно PRAMIN ещё не позиционировано */
+    uint64_t win = ~0ull;   /* заставит pramin_aim записать регистр на первом же доступе */
+
+    const uint32_t savedWindow = mfb_rd((void *)fBar0, NV_PBUS_BAR0_WINDOW);
 
     const uint32_t kMagicA = 0x4D494C43u;   /* 'MILC' */
     const uint32_t kMagicB = 0x46423031u;   /* 'FB01' */
-    uint64_t offs[2] = { vramOff, vramOff + len - 4u };
+    uint64_t offs[2]  = { vramOff, vramOff + len - 4u };
     uint32_t magic[2] = { kMagicA, kMagicB };
 
-    for (int i = 0; i < 2; i++) {
+    bool ok = true;
+    for (int i = 0; i < 2 && ok; i++) {
         uint32_t orig = nv_pramin_rd32(&io, &win, offs[i]);
         nv_pramin_wr32(&io, &win, offs[i], magic[i]);
         /* Чтение по BAR1 — MMIO, компилятор не должен его выбрасывать. */
@@ -149,12 +155,17 @@ bool MilcorixFB::probeBar1Identity(uint64_t vramOff, uint64_t len)
         if (seen != magic[i]) {
             mfb_log(nullptr, "MilcorixFB: BAR1 identity НЕ подтверждён @0x%llx (записали 0x%08x, видим 0x%08x)\n",
                     (unsigned long long)offs[i], magic[i], seen);
-            return false;
+            ok = false;
         }
     }
-    mfb_log(nullptr, "MilcorixFB: BAR1 identity ПОДТВЕРЖДЁН для VRAM 0x%llx..0x%llx\n",
-            (unsigned long long)vramOff, (unsigned long long)(vramOff + len));
-    return true;
+
+    /* Вернуть окно PRAMIN как было — см. комментарий выше. */
+    mfb_wr((void *)fBar0, NV_PBUS_BAR0_WINDOW, savedWindow);
+
+    if (ok)
+        mfb_log(nullptr, "MilcorixFB: BAR1 identity ПОДТВЕРЖДЁН для VRAM 0x%llx..0x%llx\n",
+                (unsigned long long)vramOff, (unsigned long long)(vramOff + len));
+    return ok;
 }
 
 /*
