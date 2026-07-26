@@ -98,6 +98,7 @@ public:
                                                IOSelect attribute, uintptr_t value) override;
     virtual const char * getPixelFormats(void) override;
     virtual bool     hasDDCConnect(IOIndex connectIndex) override;
+    virtual bool     isConsoleDevice(void) override;
     virtual IOReturn getDDCBlock(IOIndex connectIndex, UInt32 blockNumber,
                                  IOSelect blockType, IOOptionBits options,
                                  UInt8 *data, IOByteCount *length) override;

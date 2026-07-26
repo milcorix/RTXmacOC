@@ -73,6 +73,19 @@ static int mfb_fb_alloc_cb(void *ctx, uint32_t w, uint32_t h, uint32_t pitch,
     return self->allocScanoutFb(w, h, pitch, out_gpu_addr, out_target, out_cpu_va);
 }
 
+/*
+ * Трассировка обращений IOGraphics/WindowServer к нам. Ключевой диагностический
+ * вопрос при чёрном экране: «мы вообще подключены к композитору или система нас
+ * игнорирует?». Без этих отметок в журнале ответить нечем. Каждая точка
+ * печатается ОДИН раз — иначе WindowServer зальёт лог за секунды.
+ */
+#define MFB_TRACE_ONCE(tag, ...)                          \
+    do {                                                  \
+        static bool _seen = false;                        \
+        if (!_seen) { _seen = true;                       \
+            mfb_log(nullptr, "MilcorixFB[trace] " tag "\n", ##__VA_ARGS__); } \
+    } while (0)
+
 /* Стадия из boot-arg `milcorix=N`. По умолчанию — OFF: свежеустановленный kext
    не должен менять поведение машины, пока его явно не попросили. */
 static uint32_t mfb_read_boot_uint(const char *key, uint32_t def, uint32_t max)
@@ -528,13 +541,18 @@ IOReturn MilcorixFB::enableController(void)
 {
     /* Железо уже поднято в start() — сюда мы доходим только когда есть годный
        scanout в системной памяти. Остаётся подтвердить готовность. */
+    MFB_TRACE_ONCE("enableController — IOGraphics поднимает фреймбуфер");
     mfb_klog_flush_lazy();
     if (!fModeset || !fApertureCpuPhys) return kIOReturnNotReady;
     return kIOReturnSuccess;
 }
 
 // --- Перечисление режимов (один — нативный из EDID) ---
-IOItemCount MilcorixFB::getDisplayModeCount(void) { return 1; }
+IOItemCount MilcorixFB::getDisplayModeCount(void)
+{
+    MFB_TRACE_ONCE("getDisplayModeCount — система перечисляет режимы");
+    return 1;
+}
 
 IOReturn MilcorixFB::getDisplayModes(IODisplayModeID *allModes)
 {
@@ -596,12 +614,14 @@ IOReturn MilcorixFB::getCurrentDisplayMode(IODisplayModeID *mode, IOIndex *depth
 
 IOReturn MilcorixFB::setDisplayMode(IODisplayModeID, IOIndex)
 {
+    MFB_TRACE_ONCE("setDisplayMode — система выбирает режим");
     mfb_klog_flush_lazy();
     return modeset(fWidth, fHeight) ? kIOReturnSuccess : kIOReturnError;
 }
 
 IODeviceMemory * MilcorixFB::getApertureRange(IOPixelAperture aperture)
 {
+    MFB_TRACE_ONCE("getApertureRange(%u) — система запросила буфер кадра", (unsigned)aperture);
     if (aperture != kIOFBSystemAperture) return nullptr;
     /* Отдаём ТОЛЬКО буфер в системной памяти. Без этой проверки сюда уехал бы
        VRAM-адрес, а WindowServer писал бы пиксели в чужую физическую RAM. */
@@ -630,6 +650,7 @@ IOReturn MilcorixFB::getAttributeForConnection(IOIndex, IOSelect attribute, uint
 
 IOReturn MilcorixFB::setAttributeForConnection(IOIndex, IOSelect attribute, uintptr_t value)
 {
+    MFB_TRACE_ONCE("setAttributeForConnection — монитор подключён к нам");
     mfb_klog_flush_lazy();
     return super::setAttributeForConnection(0, attribute, value);
 }
@@ -639,7 +660,25 @@ IOReturn MilcorixFB::setAttributeForConnection(IOIndex, IOSelect attribute, uint
 bool MilcorixFB::hasDDCConnect(IOIndex connectIndex)
 {
     (void)connectIndex;
+    MFB_TRACE_ONCE("hasDDCConnect -> %d (EDID %s)", (int)fEdidOk,
+                   fEdidOk ? "есть" : "нет");
     return fEdidOk;
+}
+
+/*
+ * isConsoleDevice — считает ли система нашу карту загрузочным дисплеем. Ответ
+ * решает, отдадут ли нам консоль/рабочий стол, поэтому его надо ВИДЕТЬ, а не
+ * угадывать. Поведение не меняем: возвращаем решение базового класса, но
+ * записываем и его, и наличие свойства "AAPL,boot-display" у PCI-устройства
+ * (именно по нему базовый класс и решает).
+ */
+bool MilcorixFB::isConsoleDevice(void)
+{
+    bool base = super::isConsoleDevice();
+    bool prop = (fPci && fPci->getProperty("AAPL,boot-display") != nullptr);
+    MFB_TRACE_ONCE("isConsoleDevice -> %d (AAPL,boot-display у PCI: %d)",
+                   (int)base, (int)prop);
+    return base;
 }
 
 IOReturn MilcorixFB::getDDCBlock(IOIndex connectIndex, UInt32 blockNumber,
