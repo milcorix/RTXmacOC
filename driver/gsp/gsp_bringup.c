@@ -607,7 +607,7 @@ int nv_gsp_bringup(const nv_mmio_t *io, nv_dma_arena_t *ar,
                             cfg.mthdbuf_sysmem = 0; cfg.priv = 1;
 
                             uint32_t hchan = 0, chst = 0xffffffffu;
-                            uint32_t l4_hce = 0;
+                            uint32_t l4_hce = 0, l4_class_engine_id = 0;
                             int chrc = nv_gsp_rm_channel_alloc(&ch, &cfg, &hchan, &chst);
                             l4_chan_ok = (chrc == NV_GSP_RM_OK && chst == 0);
                             nv_log(io, "СЛОЙ 4 A2: channel_alloc rc=%d status=0x%x handle=0x%08x engineType=0x%x%s\n",
@@ -636,7 +636,18 @@ int nv_gsp_bringup(const nv_mmio_t *io, nv_dma_arena_t *ar,
                                                                       AMPERE_DMA_COPY_B,
                                                                       cfg.engineType, &cest);
                                     l4_ce_obj_ok = (cerc == NV_GSP_RM_OK && cest == 0);
-                                    if (l4_ce_obj_ok) l4_hce = hce;
+                                    if (l4_ce_obj_ok) {
+                                        l4_hce = hce;
+                                        /* classEngineID нужен для SET_OBJECT в пушбуфере —
+                                           без него методы движка копирования уйдут в никуда. */
+                                        uint32_t ceid = 0, cist = 0xffffffffu;
+                                        int circ = nv_gsp_fifo_get_class_engineid(&ch, hcli, hchan,
+                                                                                  hce, &ceid, &cist);
+                                        l4_class_engine_id = (circ == NV_GSP_RM_OK && cist == 0) ? ceid : 0;
+                                        nv_log(io, "СЛОЙ 4 B: classEngineID rc=%d status=0x%x id=0x%08x%s\n",
+                                               circ, cist, ceid,
+                                               l4_class_engine_id ? "" : "  (не получен — своя работа не пойдёт)");
+                                    }
                                     nv_log(io, "СЛОЙ 4 B: CE-объект (AMPERE_DMA_COPY_B) rc=%d status=0x%x handle=0x%08x%s\n",
                                            cerc, cest, hce, l4_ce_obj_ok ? "" : "  (не OK)");
                                 }
@@ -704,7 +715,13 @@ int nv_gsp_bringup(const nv_mmio_t *io, nv_dma_arena_t *ar,
                                         gpu->scratch_va   = va    + 0x3000ull;
                                         gpu->scratch_phys = vphys + 0x3000ull;
                                         gpu->scratch_size = (vsize > 0x3000ull) ? (vsize - 0x3000ull) : 0ull;
-                                        gpu->ok = (l4_exec_ok && l4_ce_obj_ok) ? 1 : 0;
+                                        gpu->class_engine_id = l4_class_engine_id;
+                                        /* Проход C занял слот 0 и оставил GP_PUT=1 —
+                                           продолжаем с этого места, а не с нуля. */
+                                        gpu->gp_put = 1u % gpfifo_entries;
+                                        gpu->seq = 0u;
+                                        gpu->object_bound = 0;
+                                        gpu->ok = (l4_exec_ok && l4_ce_obj_ok && l4_class_engine_id) ? 1 : 0;
                                         nv_log(io, "СЛОЙ 4: контекст исполнения отдан платформе — канал=0x%08x CE=0x%08x token=0x%x, свободно под данные %llu КиБ @VA 0x%llx\n",
                                                hchan, l4_hce, token,
                                                (unsigned long long)(gpu->scratch_size >> 10),

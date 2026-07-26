@@ -77,7 +77,28 @@ typedef struct {
     uint64_t userd_phys;             /* USERD (там GP_PUT) */
 
     uint64_t scratch_va, scratch_phys, scratch_size;  /* свободная область под данные */
+
+    uint32_t class_engine_id; /* для SET_OBJECT в пушбуфере (RM control 0x906f0101) */
+    uint32_t gp_put;          /* следующий слот кольца GPFIFO */
+    uint32_t seq;             /* счётчик payload'ов семафора — растёт с каждой отправкой */
+    int      object_bound;    /* SET_OBJECT уже отправлен на этот канал */
 } nv_gsp_gpu_ctx_t;
+
+/*
+ * Отправить на GPU копирование bytes байт src_va → dst_va и дождаться его.
+ * Адреса — GPU-виртуальные внутри замапленного региона контекста.
+ *
+ * Путь тот же, которым слой 4 исполнил первую команду на железе: методы в
+ * пушбуфер через окно PRAMIN → запись кольца GPFIFO → GP_PUT → дверной звонок →
+ * ожидание семафора. Ожидание идёт по семафору, а не по таймеру, потому что
+ * только релиз семафора гарантирует, что данные видны процессору.
+ *
+ * win_base — кэш окна PRAMIN вызывающего (как у остальных PRAMIN-функций).
+ * Возврат: 0 — копия выполнена; <0 — таймаут либо некорректные аргументы.
+ */
+int nv_gsp_gpu_copy(const nv_mmio_t *io, uint64_t *win_base, nv_gsp_gpu_ctx_t *gpu,
+                    uint64_t src_va, uint64_t dst_va, uint32_t bytes,
+                    uint32_t timeout_ms);
 
 /*
  * Провайдер scanout-фреймбуфера. Платформа решает, ГДЕ живёт FB, потому что от

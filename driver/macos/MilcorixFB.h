@@ -185,6 +185,7 @@ private:
     uint64_t consoleFbOffsetInBar1(void);   // где EFI GOP оставил консольный буфер
     void  teardown(void);         // отпустить ресурсы хоста (арену — только если GSP не запущен)
     bool  gspBringUp(void);       // слои 2–5 через переносимый core (nv_mmio_t)
+    void  runGpuSelfTest(void);   // слой 6: реальная GPU-копия через наш же канал
     bool  modeset(uint32_t w, uint32_t h);  // GSP-modeset на режим
 };
 

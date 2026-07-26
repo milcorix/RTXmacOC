@@ -159,6 +159,72 @@ uint32_t nv_gsp_fifo_build_sem_release(uint32_t *pb, uint64_t sem_va, uint32_t p
     return n;   /* 6 */
 }
 
+/* Заголовок метода пушбуфера: SEC_OP=INC_METHOD(1), count методов, подканал, adr=off>>2.
+   Формат NV906F_DMA_* неизменен от Fermi до Ada. */
+static uint32_t pb_hdr(uint32_t subch, uint32_t mthd, uint32_t count)
+{
+    return (NVC56F_DMA_INCR_OPCODE_VALUE << 29) | ((count & 0x1fffu) << 16)
+         | ((subch & 0x7u) << 13) | ((mthd >> 2) & 0xfffu);
+}
+
+int nv_gsp_fifo_get_class_engineid(nv_gsp_rpc_chan *ch, uint32_t hClient,
+                                   uint32_t hChannel, uint32_t hObject,
+                                   uint32_t *out_class_engine_id, uint32_t *status)
+{
+    if (!ch) return NV_GSP_RM_ERR_ARG;
+    uint8_t p[NV906F_CTRL_CLASS_ENGINEID_PARAMS_SIZE];
+    for (unsigned i = 0; i < sizeof(p); i++) p[i] = 0;
+    st32(p + 0, hObject);          /* hObject */
+    int rc = nv_gsp_rm_control(ch, hClient, hChannel,
+                               NV906F_CTRL_GET_CLASS_ENGINEID,
+                               p, sizeof(p), status);
+    if (out_class_engine_id) *out_class_engine_id = ld32(p + 4);   /* classEngineID */
+    return rc;
+}
+
+uint32_t nv_gsp_fifo_build_ce_copy(uint32_t *pb, uint32_t class_engine_id,
+                                   uint64_t src_va, uint64_t dst_va, uint32_t bytes,
+                                   uint64_t sem_va, uint32_t payload)
+{
+    if (!pb) return 0;
+    const uint32_t sc = NV_FIFO_SUBCH_COPY;
+    uint32_t n = 0;
+
+    /* Привязать класс копирования к подканалу (один раз на канал). */
+    if (class_engine_id) {
+        pb[n++] = pb_hdr(sc, NVC56F_SET_OBJECT, 1u);
+        pb[n++] = class_engine_id;
+    }
+
+    /* Семафор завершения: A=старшие 32 бита, B=младшие, затем payload. */
+    pb[n++] = pb_hdr(sc, NVC7B5_SET_SEMAPHORE_A, 3u);
+    pb[n++] = (uint32_t)((sem_va >> 32) & 0x1ffffu);
+    pb[n++] = (uint32_t)(sem_va & 0xffffffffu);
+    pb[n++] = payload;
+
+    /* Адреса источника и приёмника — четыре метода подряд. */
+    pb[n++] = pb_hdr(sc, NVC7B5_OFFSET_IN_UPPER, 4u);
+    pb[n++] = (uint32_t)((src_va >> 32) & 0x1ffffu);
+    pb[n++] = (uint32_t)(src_va & 0xffffffffu);
+    pb[n++] = (uint32_t)((dst_va >> 32) & 0x1ffffu);
+    pb[n++] = (uint32_t)(dst_va & 0xffffffffu);
+
+    /* Одна строка длиной bytes. MULTI_LINE выключен, поэтому PITCH_* не нужны. */
+    pb[n++] = pb_hdr(sc, NVC7B5_LINE_LENGTH_IN, 1u);
+    pb[n++] = bytes;
+
+    /* Запуск. Флаш + релиз семафора в одном LAUNCH_DMA — см. комментарий в
+       заголовке про баг 1709888. DISABLE_PLC ставим как NVIDIA для этого класса. */
+    pb[n++] = pb_hdr(sc, NVC7B5_LAUNCH_DMA, 1u);
+    pb[n++] = NVC7B5_LD_XFER_NON_PIPELINED
+            | NVC7B5_LD_FLUSH_ENABLE
+            | NVC7B5_LD_SEM_RELEASE_ONE_WORD
+            | NVC7B5_LD_SRC_LAYOUT_PITCH
+            | NVC7B5_LD_DST_LAYOUT_PITCH
+            | NVC7B5_LD_DISABLE_PLC;
+    return n;
+}
+
 void nv_gsp_fifo_gpfifo_entry(uint64_t pb_va, uint32_t pb_dwords, uint32_t *e0, uint32_t *e1)
 {
     if (e0) *e0 = (uint32_t)(pb_va & 0xfffffffcu);                  /* GET (31:2) */

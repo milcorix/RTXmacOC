@@ -292,6 +292,49 @@ static void test_pushbuffer(void)
     CHECK(((e1 >> 10) & 0x1fffffu) == 6, "GP_ENTRY1 LENGTH == 6 dword");
 }
 
+/*
+ * Кодировка команды копирования (NVC7B5). Проверяем побитово, потому что на
+ * железе ошибку тут не отладить: неверное значение в LAUNCH_DMA — это в лучшем
+ * случае молчащий движок, в худшем зависшая карта. Эталонные значения сверены
+ * с хедером вендора (clc7b5.h, 535.113.01), nouveau и Mesa/NVK.
+ */
+static void test_ce_copy(void)
+{
+    printf("[test_ce_copy]\n");
+    uint32_t pb[32];
+    uint64_t src = 0x0000002140001000ull;   /* старшие биты ненулевые — проверяем разбиение */
+    uint64_t dst = 0x0000002140002000ull;
+    uint64_t sem = 0x0000002140003000ull;
+    uint32_t n = nv_gsp_fifo_build_ce_copy(pb, 0xc7b50001u, src, dst, 4096u, sem, 0xcafe0002u);
+
+    CHECK(n == 15, "поток = 15 dword (SET_OBJECT + семафор + адреса + длина + запуск)");
+
+    /* Заголовки: SEC_OP=INC(1)<<29 | count<<16 | subch(4)<<13 | mthd>>2 */
+    CHECK(pb[0]  == 0x20018000u, "hdr SET_OBJECT count=1 subch=4");
+    CHECK(pb[1]  == 0xc7b50001u, "classEngineID передан как есть");
+    CHECK(pb[2]  == 0x20038090u, "hdr SET_SEMAPHORE_A count=3 subch=4");
+    CHECK(pb[3]  == (uint32_t)(sem >> 32), "семафор: старшие 32 бита");
+    CHECK(pb[4]  == (uint32_t)(sem & 0xffffffffu), "семафор: младшие 32 бита");
+    CHECK(pb[5]  == 0xcafe0002u, "payload семафора");
+    CHECK(pb[6]  == 0x20048100u, "hdr OFFSET_IN_UPPER count=4 subch=4");
+    CHECK(pb[7]  == (uint32_t)(src >> 32) && pb[8] == (uint32_t)(src & 0xffffffffu), "адрес источника");
+    CHECK(pb[9]  == (uint32_t)(dst >> 32) && pb[10] == (uint32_t)(dst & 0xffffffffu), "адрес приёмника");
+    CHECK(pb[11] == 0x20018106u, "hdr LINE_LENGTH_IN count=1 subch=4");
+    CHECK(pb[12] == 4096u, "длина копии в байтах");
+    CHECK(pb[13] == 0x200180c0u, "hdr LAUNCH_DMA count=1 subch=4");
+
+    /* NON_PIPELINED(2) | FLUSH(1<<2) | SEM_ONE_WORD(1<<3) | SRC_PITCH(1<<7)
+       | DST_PITCH(1<<8) | DISABLE_PLC(1<<26); SRC/DST_TYPE=VIRTUAL(0). */
+    CHECK(pb[14] == 0x0400018eu, "LAUNCH_DMA = 0x0400018E");
+    CHECK((pb[14] & (3u << 20)) == 0, "биты 20:21 нулевые (на C7B5 не определены)");
+    CHECK((pb[14] & NVC7B5_LD_MULTI_LINE) == 0, "MULTI_LINE выключен — PITCH_* не нужны");
+
+    /* Без SET_OBJECT поток на 2 dword короче и начинается с семафора. */
+    uint32_t m = nv_gsp_fifo_build_ce_copy(pb, 0u, src, dst, 64u, sem, 1u);
+    CHECK(m == 13, "без SET_OBJECT = 13 dword");
+    CHECK(pb[0] == 0x20038090u, "первый метод — SET_SEMAPHORE_A");
+}
+
 int main(void)
 {
     test_layout();
@@ -300,6 +343,7 @@ int main(void)
     test_bind_schedule();
     test_pushbuffer();
     test_ce_obj();
+    test_ce_copy();
     printf(failed ? "\n=== gsp_fifo_test: ЕСТЬ ПРОВАЛЫ ===\n" : "\n=== gsp_fifo_test: ВСЕ ТЕСТЫ ПРОШЛИ ===\n");
     return failed ? 1 : 0;
 }

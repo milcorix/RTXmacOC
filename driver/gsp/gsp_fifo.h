@@ -190,6 +190,83 @@ int nv_gsp_rm_engine_obj_alloc(nv_gsp_rpc_chan *ch, uint32_t hClient, uint32_t h
    user@0x030000 → 0xbb0000; doorbell = 0xbb0090. token = (runlistId<<16)|chid. */
 #define NV_VFN_DOORBELL_ADDR       0x00bb0090u
 
+/* ===================== Движок копирования: класс NVC7B5 (AMPERE_DMA_COPY_B) =====================
+ *
+ * Смещения методов и кодировка LAUNCH_DMA выписаны из хедера вендора
+ * (open-gpu-kernel-modules 535.113.01, src/common/sdk/nvidia/inc/class/clc7b5.h)
+ * и сверены с nouveau (nouveau_boa0b5.c) и Mesa/NVK (nvk_cmd_copy.c).
+ * Сами смещения одинаковы у NVB0B5/NVC5B5/NVC6B5/NVC7B5 — различаются только наборы полей.
+ */
+#define NVC7B5_SET_SEMAPHORE_A         0x0240u
+#define NVC7B5_SET_SEMAPHORE_B         0x0244u
+#define NVC7B5_SET_SEMAPHORE_PAYLOAD   0x0248u
+#define NVC7B5_SET_SRC_PHYS_MODE       0x0260u
+#define NVC7B5_SET_DST_PHYS_MODE       0x0264u
+#define NVC7B5_LAUNCH_DMA              0x0300u
+#define NVC7B5_OFFSET_IN_UPPER         0x0400u
+#define NVC7B5_OFFSET_IN_LOWER         0x0404u
+#define NVC7B5_OFFSET_OUT_UPPER        0x0408u
+#define NVC7B5_OFFSET_OUT_LOWER        0x040Cu
+#define NVC7B5_PITCH_IN                0x0410u
+#define NVC7B5_PITCH_OUT               0x0414u
+#define NVC7B5_LINE_LENGTH_IN          0x0418u
+#define NVC7B5_LINE_COUNT              0x041Cu
+
+/* Поля LAUNCH_DMA (битовые позиции из clc7b5.h). Биты 20:21 на C7B5 не
+   определены — в отличие от B0B5/C5B5, где там жил BYPASS_L2. Писать 0. */
+#define NVC7B5_LD_XFER_NONE            0x0u
+#define NVC7B5_LD_XFER_PIPELINED       0x1u
+#define NVC7B5_LD_XFER_NON_PIPELINED   0x2u
+#define NVC7B5_LD_FLUSH_ENABLE         (1u << 2)
+#define NVC7B5_LD_SEM_RELEASE_ONE_WORD (1u << 3)   /* SEMAPHORE_TYPE [4:3] = 1 */
+#define NVC7B5_LD_SRC_LAYOUT_PITCH     (1u << 7)
+#define NVC7B5_LD_DST_LAYOUT_PITCH     (1u << 8)
+#define NVC7B5_LD_MULTI_LINE           (1u << 9)
+#define NVC7B5_LD_REMAP_ENABLE         (1u << 10)
+#define NVC7B5_LD_SRC_TYPE_PHYSICAL    (1u << 12)  /* 0 = VIRTUAL */
+#define NVC7B5_LD_DST_TYPE_PHYSICAL    (1u << 13)  /* 0 = VIRTUAL */
+#define NVC7B5_LD_FLUSH_TYPE_GL        (1u << 25)  /* 0 = SYS — нужен нам, читает CPU */
+#define NVC7B5_LD_DISABLE_PLC          (1u << 26)
+
+/* Подканал объекта копирования. Значение 4 — не наша выдумка: так делают и RM
+   (NVA06F_SUBCHANNEL_COPY_ENGINE=4), и nouveau (PUSH906F_SUBC_NVA0B5), и NVK.
+   Для CE, разделяемого с графикой (GRCE), оно ещё и обязательно по железу. */
+#define NV_FIFO_SUBCH_COPY             4u
+
+/* SET_OBJECT канала (NVC56F_SET_OBJECT) — привязка класса к подканалу. */
+#define NVC56F_SET_OBJECT              0x0000u
+
+/* RM-control: получить classEngineID объекта на канале (ctrl906f.h).
+   Параметры: {hObject, classEngineID, classID, engineID} — 16 байт. */
+#define NV906F_CTRL_GET_CLASS_ENGINEID         0x906f0101u
+#define NV906F_CTRL_CLASS_ENGINEID_PARAMS_SIZE 16u
+
+/*
+ * Получить classEngineID объекта — он нужен для SET_OBJECT в пушбуфере.
+ * hObject — хэндл объекта копирования, созданного на канале hChannel.
+ */
+int nv_gsp_fifo_get_class_engineid(nv_gsp_rpc_chan *ch, uint32_t hClient,
+                                   uint32_t hChannel, uint32_t hObject,
+                                   uint32_t *out_class_engine_id, uint32_t *status);
+
+/*
+ * Построить поток методов «скопировать bytes байт src_va → dst_va и освободить
+ * семафор». Копия линейная (pitch), одной строкой, адреса — GPU-виртуальные.
+ *
+ * Релиз семафора складывается в ТОТ ЖЕ LAUNCH_DMA намеренно. NVIDIA прямо пишет
+ * в своём коде (uvm_maxwell_ce.c, баг 1709888), что FLUSH_ENABLE сам по себе НЕ
+ * гарантирует видимость данных — флаш действует только в паре с релизом
+ * семафора. Иначе CPU может прочитать устаревшие байты и решить, что копия не
+ * сработала.
+ *
+ * class_engine_id != 0 → в начало добавляется SET_OBJECT (привязка класса к
+ * подканалу). Нужно один раз на канал, дальше можно передавать 0.
+ * pb — массив ≥16 u32. Возврат: число заполненных dword.
+ */
+uint32_t nv_gsp_fifo_build_ce_copy(uint32_t *pb, uint32_t class_engine_id,
+                                   uint64_t src_va, uint64_t dst_va, uint32_t bytes,
+                                   uint64_t sem_va, uint32_t payload);
+
 /* Host-методы семафора NVC56F (clc56f.h), байтовые смещения (в pushbuffer addr=off>>2). */
 #define NVC56F_SEM_ADDR_LO         0x5cu   /* OFFSET 31:2 */
 #define NVC56F_SEM_ADDR_HI         0x60u   /* OFFSET 7:0  */
