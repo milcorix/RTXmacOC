@@ -12,8 +12,11 @@
     <string>1.0.0</string>
     <key>CFBundlePackageType</key>
     <string>KEXT</string>
-    <key>OSBundleRequired</key>
-    <string>Local-Root</string>
+    <!-- OSBundleRequired НАМЕРЕННО не задан. С "Local-Root" kext впекался в
+         загрузочную коллекцию и стартовал до монтирования корня: падение драйвера
+         дисплея превращало машину в кирпич, а журнал записать было некуда. Без
+         этого ключа он подхватывается штатным матчингом уже на поднятой системе —
+         корень смонтирован (журнал пишется), а сбой не мешает загрузке. -->
     <key>IOKitPersonalities</key>
     <dict>
         <key>MilcorixFB</key>
@@ -38,6 +41,14 @@
         <key>com.apple.kpi.iokit</key>
         <string>8.0</string>
         <key>com.apple.kpi.libkern</key>
+        <string>8.0</string>
+        <key>com.apple.kpi.mach</key>
+        <string>8.0</string>
+        <!-- vnode_open/vn_rdwr: чтение прошивок и запись журнала bring-up'а. -->
+        <key>com.apple.kpi.bsd</key>
+        <string>8.0</string>
+        <!-- PE_parse_boot_argn: стадия драйвера из boot-arg milcorix=N. -->
+        <key>com.apple.kpi.unsupported</key>
         <string>8.0</string>
     </dict>
 </dict>

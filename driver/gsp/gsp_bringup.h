@@ -35,12 +35,44 @@ typedef struct {
    IOFramebuffer (WindowServer), чтобы не хардкодить размеры. ok=0 → modeset не
    состоялся (нет монитора/EDID) — поля не валидны. */
 typedef struct {
-    uint64_t fb_phys;   /* физ-адрес scanout-FB во VRAM */
+    uint64_t fb_phys;   /* физ-адрес scanout-FB (VRAM-offset либо ФИЗ. адрес хоста —
+                           см. fb_sysmem: это разные адресные пространства!) */
     uint32_t width;     /* активные пиксели по горизонтали */
     uint32_t height;    /* активные пиксели по вертикали */
     uint32_t pitch;     /* байт на строку (width*4, X8R8G8B8) */
+    int      fb_sysmem; /* 1 — FB в системной памяти (fb_phys = физадрес хоста,
+                           CPU может писать напрямую); 0 — во VRAM (CPU только
+                           через PRAMIN-окно, для апертуры ОС НЕ годится) */
     int      ok;        /* 1 — modeset+scanout запрограммированы */
+    uint8_t  edid[128]; /* EDID активного монитора (блок 0), если edid_ok */
+    int      edid_ok;
 } nv_gsp_scanout_t;
+
+/*
+ * Провайдер scanout-фреймбуфера. Платформа решает, ГДЕ живёт FB, потому что от
+ * этого зависит, сможет ли ОС отдать его своему композитору:
+ *
+ *  - Linux-стенд (dbg-прогон) провайдера НЕ даёт (NULL) → FB берётся во VRAM по
+ *    фиксированному адресу и заливается через PRAMIN. Так снят слой 5 на железе.
+ *  - macOS-kext ОБЯЗАН дать провайдера с sysmem=1: WindowServer'у нужен обычный
+ *    CPU-писабельный буфер, а VRAM за 1-МиБ окном PRAMIN для этого непригоден.
+ *    Дисплей тогда читает поверхность прямо из системной памяти (ctx-dma
+ *    TARGET=PCI, когерентно).
+ *
+ * alloc() вызывается ОДИН раз, уже после разбора EDID (то есть под конкретный
+ * режим), до постройки ctx-dma. Возврат 0 — успех.
+ *   out_phys — адрес, который увидит GPU (при IOMMU off = физадрес хоста);
+ *   out_va   — CPU-адрес того же буфера (для очистки экрана), может быть NULL.
+ */
+typedef struct {
+    void *ctx;
+    int (*alloc)(void *ctx, uint32_t w, uint32_t h, uint32_t pitch,
+                 uint64_t *out_phys, void **out_va);
+    int sysmem;        /* 1 — буфер в системной памяти → ctx-dma TARGET=SYSMEM */
+    int skip_modeset;  /* 1 — НЕ трогать вывод: перечислить дисплеи и выйти.
+                          Нужно, чтобы отделить «GSP поднялся» от «мы сломали
+                          картинку»: на этой стадии экран остаётся за EFI-FB. */
+} nv_gsp_fb_provider_t;
 
 /*
  * Полный bring-up GSP-RM: FWSEC-FRTS → staging → Booter → RPC → слои 3-5.
@@ -51,11 +83,13 @@ typedef struct {
  *          дампит логи и держит длинные паузы «разглядеть монитор» (Linux-стенд).
  *          kext передаёт NULL — без дампов и без секундных задержек scanout;
  *   scan — (опц., может быть NULL) заполняется геометрией запрограммированного
- *          scanout-FB (см. nv_gsp_scanout_t).
+ *          scanout-FB (см. nv_gsp_scanout_t);
+ *   fbp  — (опц., может быть NULL) провайдер scanout-FB (см. nv_gsp_fb_provider_t).
+ *          NULL → историческое поведение: FB во VRAM + заливка через PRAMIN.
  * Возврат: 0 — GSP-RM загружен и RISC-V active; <0 — провал (см. io->log).
  */
 int nv_gsp_bringup(const nv_mmio_t *io, nv_dma_arena_t *ar,
                    const nv_gsp_pci_info_t *pci, const nv_gsp_debug_t *dbg,
-                   nv_gsp_scanout_t *scan);
+                   nv_gsp_scanout_t *scan, const nv_gsp_fb_provider_t *fbp);
 
 #endif /* RTXMACOC_GSP_BRINGUP_H */

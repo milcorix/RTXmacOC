@@ -148,7 +148,14 @@
 /* Дескриптор ctx-dma Volta+ (gv100_dmaobj_bind, 24б, 16-align, в inst-mem дисплея):
    @0x00 flags0; @0x04 start>>8 lo; @0x08 start>>8 hi; @0x0c limit>>8 lo; @0x10 limit>>8 hi. */
 #define NV_CTXDMA_DESC_SIZE            24u
-#define NV_CTXDMA_FLAGS0_VRAM          0x00000001u
+/* flags0[1:0] — TARGET (апертура, из которой дисплей читает поверхность). Кодировка
+   gf119_dmaobj_new (nouveau nvkm/engine/dma/usergf119.c): 0=VM(через GMMU),
+   1=VRAM, 2=PCI (sysmem, snooped/когерентно), 3=PCI_NOSNOOP. */
+#define NV_CTXDMA_TARGET_VM            0x00000000u
+#define NV_CTXDMA_TARGET_VRAM          0x00000001u
+#define NV_CTXDMA_TARGET_SYSMEM        0x00000002u   /* PCI, snooped — CPU-когерентно */
+#define NV_CTXDMA_TARGET_SYSMEM_NOSNOOP 0x00000003u
+#define NV_CTXDMA_FLAGS0_VRAM          NV_CTXDMA_TARGET_VRAM   /* историческое имя */
 #define NV_CTXDMA_FLAGS0_RW            0x00000004u
 #define NV_CTXDMA_FLAGS0_PAGE_SP       0x00000040u   /* GF119_DMA_V0_PAGE_SP */
 #define NV_CTXDMA_FLAGS0_VRAM_RW       (NV_CTXDMA_FLAGS0_VRAM | NV_CTXDMA_FLAGS0_RW | NV_CTXDMA_FLAGS0_PAGE_SP)  /* 0x45 */
@@ -261,9 +268,15 @@ void nv_gsp_disp_build_window_update(uint8_t *pb, uint32_t *off, int interlock_w
 
 /*
  * 5C.4d: закодировать 24-байтный дескриптор ctx-dma Volta+ (gv100_dmaobj_bind) в desc[24]
- * для диапазона VRAM [start..limit] (RDWR). Затем пишется в inst-mem дисплея через PRAMIN.
+ * для диапазона [start..limit] (RDWR). Затем пишется в inst-mem дисплея через PRAMIN.
+ *
+ * target — апертура (NV_CTXDMA_TARGET_*): VRAM для scanout из видеопамяти,
+ * SYSMEM для scanout прямо из системной памяти по PCIe (тогда start/limit —
+ * ФИЗИЧЕСКИЕ адреса хоста; это путь macOS-kext'а, где CPU-видимый FB обязан
+ * быть обычной RAM, а не VRAM за окном PRAMIN).
  */
-void nv_gsp_disp_build_ctxdma_desc(uint8_t *desc, uint64_t start, uint64_t limit);
+void nv_gsp_disp_build_ctxdma_desc(uint8_t *desc, uint64_t start, uint64_t limit,
+                                   uint32_t target);
 
 /*
  * 5C.4d: вычислить индекс RAMHT-слота (co) для (chid, handle) и context-слово.

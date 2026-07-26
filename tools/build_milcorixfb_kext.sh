@@ -36,6 +36,7 @@ CXXFLAGS=(-arch "$ARCH" -isysroot "$SDK" -I"$KHDR" -I"$KPHDR"
           -DKERNEL -DKERNEL_PRIVATE -DDRIVER_PRIVATE -DAPPLE -DNeXT -std=gnu++17)
 clang++ -x c++ -c driver/macos/MilcorixFB.cpp   "${CXXFLAGS[@]}" -o "$OUTDIR/MilcorixFB.o"
 clang++ -x c++ -c driver/macos/fw_blob_macos.cpp "${CXXFLAGS[@]}" -o "$OUTDIR/fw_blob_macos.o"
+clang++ -x c++ -c driver/macos/mfb_klog.cpp      "${CXXFLAGS[@]}" -o "$OUTDIR/mfb_klog.o"
 
 # --- 2. Переносимое ядро GSP как kernel-C -------------------------------------
 CFLAGS=(-arch "$ARCH" -isysroot "$SDK" -I"$KHDR"
@@ -54,7 +55,7 @@ done
 # Наши nv_*/C++ символы должны быть закрыты — иначе kext не загрузится.
 KEXTBIN="$OUTDIR/MilcorixFB.bin"
 ld -kext -arch "$ARCH" \
-   "$OUTDIR/MilcorixFB.o" "$OUTDIR/fw_blob_macos.o" "${CORE_OBJ[@]}" \
+   "$OUTDIR/MilcorixFB.o" "$OUTDIR/fw_blob_macos.o" "$OUTDIR/mfb_klog.o" "${CORE_OBJ[@]}" \
    -o "$KEXTBIN"
 
 # Санитарная проверка: неопределённых nv_* быть не должно (все закрыты обвязкой/core).

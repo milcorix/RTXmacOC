@@ -126,6 +126,23 @@ jobs:
             -o build/fw_blob_macos.o
           echo "OK: fw_blob_macos (vnode firmware shim compiles)"
 
+      - name: Build kext boot journal (mfb_klog — лог, переживающий чёрный экран)
+        run: |
+          mkdir -p build
+          SDK="$(xcrun --sdk macosx --show-sdk-path)"
+          # Трейс bring-up'а на диск + статус в NVRAM: без этого при чёрном экране
+          # диагностировать нечем (unified log снаружи не разобрать).
+          clang++ -x c++ -c driver/macos/mfb_klog.cpp \
+            -arch x86_64 \
+            -isysroot "$SDK" \
+            -I"$SDK/System/Library/Frameworks/Kernel.framework/Headers" \
+            -I"$SDK/System/Library/Frameworks/Kernel.framework/PrivateHeaders" \
+            -fapple-kext -fno-builtin -fno-exceptions -fno-rtti -fno-common \
+            -DKERNEL -DKERNEL_PRIVATE -DDRIVER_PRIVATE -DAPPLE -DNeXT \
+            -std=gnu++17 \
+            -o build/mfb_klog.o
+          echo "OK: mfb_klog (журнал bring-up'а компилируется)"
+
       - name: Link full MilcorixFB kext (symbols resolve — walls 1-3 closed)
         run: |
           mkdir -p build
@@ -145,7 +162,7 @@ jobs:
             CORE_OBJ="$CORE_OBJ $o"
           done
           ld -r -arch x86_64 \
-            build/MilcorixFB.o build/fw_blob_macos.o $CORE_OBJ \
+            build/MilcorixFB.o build/fw_blob_macos.o build/mfb_klog.o $CORE_OBJ \
             -o build/MilcorixFB.kext.o
           echo "=== undefined symbols (ожидаем только IOKit/Kernel KPI) ==="
           nm -u build/MilcorixFB.kext.o | sort | tee build/undef.txt

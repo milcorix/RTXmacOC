@@ -154,9 +154,10 @@ static int exec_cpu_sequencer(struct seq_ctx *c, const uint32_t *cb, uint32_t cm
 /* ===================== главный прогон ===================== */
 int nv_gsp_bringup(const nv_mmio_t *io, nv_dma_arena_t *ar,
                const nv_gsp_pci_info_t *pci, const nv_gsp_debug_t *dbg,
-               nv_gsp_scanout_t *scan)
+               nv_gsp_scanout_t *scan, const nv_gsp_fb_provider_t *fbp)
 {
-    if (scan) { scan->fb_phys=0; scan->width=0; scan->height=0; scan->pitch=0; scan->ok=0; }
+    if (scan) { scan->fb_phys=0; scan->width=0; scan->height=0; scan->pitch=0;
+                scan->ok=0; scan->fb_sysmem=0; scan->edid_ok=0; }
     uint32_t boot0 = io->rd(io->ctx,0x0);
     nv_log(io, "PMC_BOOT_0 = 0x%08x\n", boot0);
     if (nv_wait_gfw_boot_completed(io,4u*1000000u)!=NV_OK){nv_log(io,"FAIL: GFW boot\n");return -1;}
@@ -836,7 +837,10 @@ int nv_gsp_bringup(const nv_mmio_t *io, nv_dma_arena_t *ar,
                                Выделяем FB во VRAM (1920x1080 BGRA), заливаем 3 полосы
                                R/G/B через PRAMIN, читаем обратно. Безопасно (вывод не
                                трогаем). FB — под surface для scanout (5C.4c-d). */
-                            {
+                            /* Только диагностический (Linux) прогон: на macOS этот
+                               паттерн писал бы 8 МиБ во VRAM вслепую — там может
+                               лежать активный EFI-фреймбуфер. */
+                            if (!fbp) {
                                 uint64_t fb_phys = 0x14000000ull;   /* FB во VRAM (usable) */
                                 uint32_t fb_w = 1920, fb_h = 1080;
                                 uint32_t pitch = fb_w * 4u;         /* BGRA8888 */
@@ -865,6 +869,10 @@ int nv_gsp_bringup(const nv_mmio_t *io, nv_dma_arena_t *ar,
                                interlock окон=0) — проверяем сам механизм сабмита + программу
                                таймингов. Пиксели (window+ctx-dma) — 5C.4e. Порт corec37d_*+
                                headc37d_mode. PUT/GET: NV507C @user+0x0/+0x4, PTR[11:2]=байт-offset. */
+                            if (fbp && fbp->skip_modeset) {
+                                nv_log(io, "СЛОЙ 5: modeset ПРОПУЩЕН по требованию платформы "
+                                           "(стадия проверки bring-up'а — вывод не трогаем)\n");
+                            } else
                             if (wrc==NV_GSP_RM_OK && wst==0 && md_edid_ok && md_sor != ~0u) {
                                 nv_edid_timing mt;
                                 int mprc = nv_edid_parse_dtd(md_edid, sizeof(md_edid), &mt);
@@ -885,14 +893,55 @@ int nv_gsp_bringup(const nv_mmio_t *io, nv_dma_arena_t *ar,
                                     uint32_t head = 0;
                                     uint32_t wnd = 0;                 /* window-инстанс (owner head0) */
                                     (void)wnd;                        /* ф4: окно флипается standalone, без interlock-бита */
-                                    uint64_t fb2 = 0x14000000ull;
                                     uint32_t w = mt.hact, h = mt.vact, pit = w * 4u;
+                                    uint64_t fbsz = (uint64_t)pit * h;
+
+                                    /* --- ГДЕ ЖИВЁТ scanout-FB ---
+                                       Без провайдера (Linux-стенд): фиксированный адрес во VRAM,
+                                       CPU пишет туда через окно PRAMIN. Так снят слой 5 на железе.
+                                       С провайдером (macOS-kext): буфер в СИСТЕМНОЙ памяти, потому
+                                       что апертуру IOFramebuffer WindowServer мапит как обычную
+                                       RAM — VRAM за 1-МиБ окном PRAMIN для этого непригоден
+                                       принципиально. Дисплей читает поверхность по PCIe
+                                       (ctx-dma TARGET=SYSMEM, когерентно). */
+                                    uint64_t fb2 = 0x14000000ull;
+                                    uint32_t fb_target = NV_CTXDMA_TARGET_VRAM;
+                                    int   fb_is_sysmem = 0;
+                                    void *fb_va = NULL;
+                                    if (fbp && fbp->alloc) {
+                                        uint64_t fp = 0; void *fv = NULL;
+                                        int frc = fbp->alloc(fbp->ctx, w, h, pit, &fp, &fv);
+                                        if (frc == 0 && fp) {
+                                            fb2 = fp; fb_va = fv;
+                                            if (fbp->sysmem) {
+                                                fb_target = NV_CTXDMA_TARGET_SYSMEM;
+                                                fb_is_sysmem = 1;
+                                            }
+                                            nv_log(io, "СЛОЙ 5: FB от платформы @0x%llx (%s) %ux%u pitch=%u va=%p\n",
+                                                   (unsigned long long)fb2,
+                                                   fb_is_sysmem ? "СИСТЕМНАЯ ПАМЯТЬ" : "VRAM",
+                                                   w, h, pit, fb_va);
+                                        } else {
+                                            /* Платформа не смогла выделить — откатываемся на VRAM.
+                                               fb_is_sysmem остаётся 0, и потребитель (kext) по этому
+                                               признаку НЕ станет публиковать апертуру: адрес VRAM в
+                                               адресном пространстве хоста означал бы запись пикселей
+                                               в чужую системную память. */
+                                            nv_log(io, "СЛОЙ 5: провайдер FB отказал (rc=%d) — откат на VRAM, апертура НЕ будет отдана\n",
+                                                   frc);
+                                        }
+                                    }
 
                                     /* 1) FB под нативное разрешение (из EDID) — сплошной БЕЛЫЙ
                                        (X8R8G8B8 0x00ffffff): на чёрном "нет сигнала" белый экран
                                        = однозначно наши пиксели. */
-                                    uint64_t fbsz = (uint64_t)pit * h;
-                                    nv_pramin_fill(io, &win, fb2, (uint32_t)fbsz, 0x00ffffffu);
+                                    if (fb_is_sysmem && fb_va) {
+                                        volatile uint32_t *px = (volatile uint32_t *)fb_va;
+                                        uint64_t n = fbsz >> 2;
+                                        for (uint64_t i = 0; i < n; i++) px[i] = 0x00ffffffu;
+                                    } else {
+                                        nv_pramin_fill(io, &win, fb2, (uint32_t)fbsz, 0x00ffffffu);
+                                    }
 
                                     /* 2) ctx-dma NV_DMA_IN_MEMORY (весь VRAM, RDWR) — 24б дескриптор в
                                        inst-mem дисплея @disp_inst+0x1000 (после RAMHT). */
@@ -911,7 +960,7 @@ int nv_gsp_bringup(const nv_mmio_t *io, nv_dma_arena_t *ar,
 
                                     uint8_t desc[NV_CTXDMA_DESC_SIZE];
                                     /* ctx-dma РОВНО на FB (start..start+size-1), SET_OFFSET=0. */
-                                    nv_gsp_disp_build_ctxdma_desc(desc, fb2, fb2 + fbsz - 1);
+                                    nv_gsp_disp_build_ctxdma_desc(desc, fb2, fb2 + fbsz - 1, fb_target);
                                     for (unsigned i = 0; i < NV_CTXDMA_DESC_SIZE; i += 4)
                                         nv_pramin_wr32(io, &win, desc_phys + i,
                                                        (uint32_t)desc[i] | ((uint32_t)desc[i+1]<<8) |
@@ -984,6 +1033,12 @@ int nv_gsp_bringup(const nv_mmio_t *io, nv_dma_arena_t *ar,
                                     if (scan && cdone) {
                                         scan->fb_phys = fb2; scan->width = w;
                                         scan->height = h;    scan->pitch = pit; scan->ok = 1;
+                                        scan->fb_sysmem = fb_is_sysmem;
+                                        if (md_edid_ok) {
+                                            for (unsigned e = 0; e < sizeof(scan->edid); e++)
+                                                scan->edid[e] = md_edid[e];
+                                            scan->edid_ok = 1;
+                                        }
                                     }
 
                                     /* --- ФАЗА 3: OUTPUT_RESOURCE отдельным апдейтом ПОСЛЕ подъёма головы.

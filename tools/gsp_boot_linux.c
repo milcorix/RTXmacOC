@@ -166,8 +166,9 @@ int main(int argc, char **argv)
     nv_gsp_debug_t dbg={.ctx=NULL,.dump=dbg_dump};
 
     /* Linux-стенд — диагностический прогон: dbg!=NULL включает дампы и длинные
-       паузы «разглядеть монитор». scan не нужен (стенд не публикует апертуру). */
-    int rc=nv_gsp_bringup(&io,&ar,&pci,&dbg,NULL);
+       паузы «разглядеть монитор». scan не нужен (стенд не публикует апертуру),
+       провайдер FB не нужен (FB берётся во VRAM и заливается через PRAMIN). */
+    int rc=nv_gsp_bringup(&io,&ar,&pci,&dbg,NULL,NULL);
 
     struct vfio_iommu_type1_dma_unmap u={.argsz=sizeof(u),.iova=ARENA_IOVA,.size=ARENA_SIZE};
     ioctl(v.container,VFIO_IOMMU_UNMAP_DMA,&u); munmap(abuf,ARENA_SIZE); vfio_close(&v);

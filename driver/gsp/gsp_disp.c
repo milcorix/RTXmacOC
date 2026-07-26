@@ -410,12 +410,14 @@ void nv_gsp_disp_build_window_update(uint8_t *pb, uint32_t *off, int interlock_w
     nv_gsp_disp_push_method(pb, off, NVC37E_UPDATE, NVC37D_UPDATE_DATA);
 }
 
-void nv_gsp_disp_build_ctxdma_desc(uint8_t *desc, uint64_t start, uint64_t limit)
+void nv_gsp_disp_build_ctxdma_desc(uint8_t *desc, uint64_t start, uint64_t limit,
+                                   uint32_t target)
 {
     if (!desc) return;
     for (unsigned i = 0; i < NV_CTXDMA_DESC_SIZE; i++) desc[i] = 0;
     uint64_t s = start >> 8, l = limit >> 8;
-    st32(desc + 0x00, NV_CTXDMA_FLAGS0_VRAM_RW);
+    /* flags0 = TARGET[1:0] | RW | PAGE_SP; kind=PITCH(0) в старших битах. */
+    st32(desc + 0x00, (target & 0x3u) | NV_CTXDMA_FLAGS0_RW | NV_CTXDMA_FLAGS0_PAGE_SP);
     st32(desc + 0x04, (uint32_t)(s & 0xffffffffu));
     st32(desc + 0x08, (uint32_t)(s >> 32));
     st32(desc + 0x0c, (uint32_t)(l & 0xffffffffu));

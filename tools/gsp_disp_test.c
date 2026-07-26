@@ -420,11 +420,19 @@ static void test_ctxdma_and_ramht(void)
     printf("[test_ctxdma_and_ramht]\n");
     uint8_t desc[NV_CTXDMA_DESC_SIZE];
     /* ctx-dma на весь VRAM: start=0, limit=0x2ffffffff (12 ГиБ-1). */
-    nv_gsp_disp_build_ctxdma_desc(desc, 0, 0x2ffffffffull);
+    nv_gsp_disp_build_ctxdma_desc(desc, 0, 0x2ffffffffull, NV_CTXDMA_TARGET_VRAM);
     CHECK(ld32(desc+0x00) == 0x45u, "flags0 = VRAM|RW|PAGE_SP = 0x45");
     CHECK(ld32(desc+0x04) == 0u && ld32(desc+0x08) == 0u, "start>>8 = 0");
     CHECK(ld32(desc+0x0c) == (uint32_t)((0x2ffffffffull>>8)&0xffffffffu), "limit>>8 lo");
     CHECK(ld32(desc+0x10) == (uint32_t)((0x2ffffffffull>>8)>>32), "limit>>8 hi");
+
+    /* Тот же дескриптор, но апертура SYSMEM (scanout прямо из системной памяти —
+       путь macOS-kext'а): меняются только биты TARGET[1:0]. */
+    uint8_t dsys[NV_CTXDMA_DESC_SIZE];
+    nv_gsp_disp_build_ctxdma_desc(dsys, 0x1234500ull, 0x1234500ull + 0xfffull,
+                                  NV_CTXDMA_TARGET_SYSMEM);
+    CHECK(ld32(dsys+0x00) == 0x46u, "flags0 = SYSMEM|RW|PAGE_SP = 0x46");
+    CHECK(ld32(dsys+0x04) == (uint32_t)(0x1234500ull>>8), "sysmem start>>8");
 
     uint32_t slot, ctx;
     nv_gsp_disp_ramht_entry(NV_DISP_CHID_CORE, NV_DISP_HANDLE_SYNCBUF, 0xc1d00001u, 0x1000u, &slot, &ctx);
