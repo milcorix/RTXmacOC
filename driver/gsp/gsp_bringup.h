@@ -48,6 +48,38 @@ typedef struct {
 } nv_gsp_scanout_t;
 
 /*
+ * Живой контекст исполнения на GPU, остающийся ПОСЛЕ bring-up'а.
+ *
+ * Слой 4 создаёт канал GPFIFO, привязывает его к движку копирования и исполняет
+ * первую команду. Раньше всё это было одноразовой проверкой — состояние
+ * создавалось и терялось. Здесь оно отдаётся наружу, чтобы платформа могла
+ * отправлять СВОЮ работу, не переписывая путь, уже проверенный на железе.
+ *
+ * Раскладка замапленного региона [ring_va, ring_va+region_size):
+ *     +0x0000  кольцо GPFIFO (ring_entries записей по 8 байт)
+ *     +0x1000  пушбуфер
+ *     +0x2000  семафор завершения
+ *     +0x3000  свободно — отдано под данные (scratch_*)
+ *
+ * Регион имеет и GPU-VA, и физический адрес во VRAM: команды адресуются по VA,
+ * а CPU дотягивается до тех же байт через окно PRAMIN по физическому адресу.
+ */
+typedef struct {
+    int      ok;             /* 1 — канал создан, привязан, запланирован и исполнил команду */
+    uint32_t h_client, h_device, h_vaspace, h_channel, h_ce;
+    uint32_t chid, runlist;  /* token дверного звонка = (runlist<<16)|chid */
+    uint32_t engine_type;    /* RM_ENGINE_TYPE движка канала */
+
+    uint64_t ring_va,  ring_phys;    /* кольцо GPFIFO */
+    uint32_t ring_entries;
+    uint64_t pb_va,    pb_phys;      /* пушбуфер */
+    uint64_t sem_va,   sem_phys;     /* семафор завершения */
+    uint64_t userd_phys;             /* USERD (там GP_PUT) */
+
+    uint64_t scratch_va, scratch_phys, scratch_size;  /* свободная область под данные */
+} nv_gsp_gpu_ctx_t;
+
+/*
  * Провайдер scanout-фреймбуфера. Платформа решает, ГДЕ живёт FB, потому что от
  * этого зависит, сможет ли ОС отдать его своему композитору:
  *
@@ -91,11 +123,14 @@ typedef struct {
  *   scan — (опц., может быть NULL) заполняется геометрией запрограммированного
  *          scanout-FB (см. nv_gsp_scanout_t);
  *   fbp  — (опц., может быть NULL) провайдер scanout-FB (см. nv_gsp_fb_provider_t).
- *          NULL → историческое поведение: FB во VRAM + заливка через PRAMIN.
+ *          NULL → историческое поведение: FB во VRAM + заливка через PRAMIN;
+ *   gpu  — (опц., может быть NULL) заполняется живым контекстом исполнения
+ *          (см. nv_gsp_gpu_ctx_t), чтобы платформа могла слать свою работу.
  * Возврат: 0 — GSP-RM загружен и RISC-V active; <0 — провал (см. io->log).
  */
 int nv_gsp_bringup(const nv_mmio_t *io, nv_dma_arena_t *ar,
                    const nv_gsp_pci_info_t *pci, const nv_gsp_debug_t *dbg,
-                   nv_gsp_scanout_t *scan, const nv_gsp_fb_provider_t *fbp);
+                   nv_gsp_scanout_t *scan, const nv_gsp_fb_provider_t *fbp,
+                   nv_gsp_gpu_ctx_t *gpu);
 
 #endif /* RTXMACOC_GSP_BRINGUP_H */

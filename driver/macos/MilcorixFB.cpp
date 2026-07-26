@@ -403,10 +403,20 @@ bool MilcorixFB::gspBringUp(void)
     nv_gsp_scanout_t scan;
     /* С этого момента прошивка живёт в арене — освобождать её больше нельзя. */
     fGspRunning = true;
-    int rc = nv_gsp_bringup(&io, &arena, &pci, /*dbg=*/nullptr, &scan, &fbp);
+    int rc = nv_gsp_bringup(&io, &arena, &pci, /*dbg=*/nullptr, &scan, &fbp, &fGpu);
     if (rc != 0) {
         mfb_log(nullptr, "MilcorixFB: gspBringUp FAIL (rc=%d)\n", rc);
         return false;
+    }
+
+    if (fGpu.ok) {
+        mfb_log(nullptr, "MilcorixFB: GPU-контекст жив — канал=0x%08x CE=0x%08x, "
+                         "площадка под данные %llu КиБ @VA 0x%llx (основа слоя 6)\n",
+                fGpu.h_channel, fGpu.h_ce,
+                (unsigned long long)(fGpu.scratch_size >> 10),
+                (unsigned long long)fGpu.scratch_va);
+    } else {
+        mfb_log(nullptr, "MilcorixFB: GPU-контекст НЕ получен (канал/CE не поднялись)\n");
     }
 
     if (scan.ok) {
@@ -463,6 +473,7 @@ bool MilcorixFB::start(IOService *provider)
     fFbBuf = nullptr;   fFbGpuAddr = 0;     fFbTarget = 0;
     fApertureCpuPhys = 0; fApertureLen = 0;
     fModeset = false;   fEdidOk = false;    fGspRunning = false;
+    bzero(&fGpu, sizeof(fGpu));
     fWidth = 1280; fHeight = 1024; fPitch = fWidth * 4u;
 
     fStage  = mfb_read_boot_uint("milcorix",   MILCORIX_STAGE_OFF,   MILCORIX_STAGE_FULL);

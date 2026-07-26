@@ -34,6 +34,10 @@
 #include <IOKit/pci/IOPCIDevice.h>
 #include <IOKit/IOBufferMemoryDescriptor.h>
 
+extern "C" {
+#include "../gsp/gsp_bringup.h"   /* nv_gsp_gpu_ctx_t — живой контекст исполнения */
+}
+
 // Идентификатор карты (Ada AD104, RTX 4070 Super).
 #define MILCORIX_PCI_VENDOR   0x10DE
 #define MILCORIX_PCI_DEVICE   0x2783
@@ -167,6 +171,11 @@ private:
        эти страницы обратно ядру — значит получить порчу чужой памяти, то есть
        ровно тот класс бага, из-за которого всё и началось. */
     bool                  fGspRunning;
+
+    /* Живой контекст исполнения на GPU (канал GPFIFO + движок копирования),
+       оставшийся после bring-up'а. Основа для слоя 6: через него платформа
+       отправляет собственную работу, не пересоздавая канал. */
+    nv_gsp_gpu_ctx_t      fGpu;
 
     bool  mapBars(void);
     bool  allocDmaArena(void);    // выделить физически непрерывную DMA-арену

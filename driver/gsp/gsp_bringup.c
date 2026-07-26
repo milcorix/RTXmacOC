@@ -154,10 +154,12 @@ static int exec_cpu_sequencer(struct seq_ctx *c, const uint32_t *cb, uint32_t cm
 /* ===================== главный прогон ===================== */
 int nv_gsp_bringup(const nv_mmio_t *io, nv_dma_arena_t *ar,
                const nv_gsp_pci_info_t *pci, const nv_gsp_debug_t *dbg,
-               nv_gsp_scanout_t *scan, const nv_gsp_fb_provider_t *fbp)
+               nv_gsp_scanout_t *scan, const nv_gsp_fb_provider_t *fbp,
+               nv_gsp_gpu_ctx_t *gpu)
 {
     if (scan) { scan->fb_phys=0; scan->width=0; scan->height=0; scan->pitch=0;
                 scan->ok=0; scan->fb_target=0; scan->edid_ok=0; }
+    if (gpu)  { memset(gpu, 0, sizeof(*gpu)); }
     uint32_t boot0 = io->rd(io->ctx,0x0);
     nv_log(io, "PMC_BOOT_0 = 0x%08x\n", boot0);
     if (nv_wait_gfw_boot_completed(io,4u*1000000u)!=NV_OK){nv_log(io,"FAIL: GFW boot\n");return -1;}
@@ -605,6 +607,7 @@ int nv_gsp_bringup(const nv_mmio_t *io, nv_dma_arena_t *ar,
                             cfg.mthdbuf_sysmem = 0; cfg.priv = 1;
 
                             uint32_t hchan = 0, chst = 0xffffffffu;
+                            uint32_t l4_hce = 0;
                             int chrc = nv_gsp_rm_channel_alloc(&ch, &cfg, &hchan, &chst);
                             l4_chan_ok = (chrc == NV_GSP_RM_OK && chst == 0);
                             nv_log(io, "СЛОЙ 4 A2: channel_alloc rc=%d status=0x%x handle=0x%08x engineType=0x%x%s\n",
@@ -627,11 +630,13 @@ int nv_gsp_bringup(const nv_mmio_t *io, nv_dma_arena_t *ar,
                                 /* --- ПРОХОД B: объект copy-engine (AMPERE_DMA_COPY_B) на канале ---
                                    NVB0B5_ALLOCATION_PARAMETERS{version=1, engineType=CE0}. */
                                 if (l4_sched_ok) {
-                                    uint32_t hce = NV_GSP_RM_CE_OBJ_HANDLE | 0u, cest = 0xffffffffu;
+                                    uint32_t cest = 0xffffffffu;
+                                    uint32_t hce = NV_GSP_RM_CE_OBJ_HANDLE | 0u;
                                     int cerc = nv_gsp_rm_ce_obj_alloc(&ch, hcli, hchan, hce,
                                                                       AMPERE_DMA_COPY_B,
                                                                       cfg.engineType, &cest);
                                     l4_ce_obj_ok = (cerc == NV_GSP_RM_OK && cest == 0);
+                                    if (l4_ce_obj_ok) l4_hce = hce;
                                     nv_log(io, "СЛОЙ 4 B: CE-объект (AMPERE_DMA_COPY_B) rc=%d status=0x%x handle=0x%08x%s\n",
                                            cerc, cest, hce, l4_ce_obj_ok ? "" : "  (не OK)");
                                 }
@@ -671,6 +676,40 @@ int nv_gsp_bringup(const nv_mmio_t *io, nv_dma_arena_t *ar,
                                     nv_log(io, "СЛОЙ 4 C: sem-release payload=0x%x got=0x%x doorbell(0x%x)=0x%x %s\n",
                                            payload, got, NV_VFN_DOORBELL_ADDR, token,
                                            l4_exec_ok ? "★ ИСПОЛНЕНО ★" : "(нет релиза)");
+
+                                    /* --- Отдать платформе ЖИВОЙ контекст исполнения ---
+                                       Канал остаётся созданным, привязанным и запланированным,
+                                       движок копирования — на нём. Дальше платформа может слать
+                                       свою работу тем же путём: положить методы в пушбуфер,
+                                       обновить GP_PUT, позвонить в doorbell, дождаться семафора.
+                                       Первые 12 КиБ региона заняты кольцом/пушбуфером/семафором,
+                                       остальное свободно под данные. */
+                                    if (gpu) {
+                                        gpu->h_client   = hcli;
+                                        gpu->h_device   = hdev;
+                                        gpu->h_vaspace  = hva;
+                                        gpu->h_channel  = hchan;
+                                        gpu->h_ce       = l4_hce;
+                                        gpu->chid       = cfg.chid;
+                                        gpu->runlist    = l4_ce_runlist;
+                                        gpu->engine_type = cfg.engineType;
+                                        gpu->ring_va    = va;
+                                        gpu->ring_phys  = vphys;
+                                        gpu->ring_entries = gpfifo_entries;
+                                        gpu->pb_va      = pb_va;
+                                        gpu->pb_phys    = pb_phys;
+                                        gpu->sem_va     = sem_va;
+                                        gpu->sem_phys   = sem_phys;
+                                        gpu->userd_phys = userd_phys;
+                                        gpu->scratch_va   = va    + 0x3000ull;
+                                        gpu->scratch_phys = vphys + 0x3000ull;
+                                        gpu->scratch_size = (vsize > 0x3000ull) ? (vsize - 0x3000ull) : 0ull;
+                                        gpu->ok = (l4_exec_ok && l4_ce_obj_ok) ? 1 : 0;
+                                        nv_log(io, "СЛОЙ 4: контекст исполнения отдан платформе — канал=0x%08x CE=0x%08x token=0x%x, свободно под данные %llu КиБ @VA 0x%llx\n",
+                                               hchan, l4_hce, token,
+                                               (unsigned long long)(gpu->scratch_size >> 10),
+                                               (unsigned long long)gpu->scratch_va);
+                                    }
                                 }
                             }
                         }
