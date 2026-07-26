@@ -74,12 +74,30 @@ clang -c "$OUTDIR/kmod_info.c" -arch "$ARCH" -isysroot "$SDK" -I"$KHDR" \
 # `ld -kext`: KPI-символы (IOKit/libkern) остаются неопределёнными и резолвятся
 # при загрузке kextload'ом против запрошенных в Info.plist OSBundleLibraries.
 # Наши nv_*/C++ символы должны быть закрыты — иначе kext не загрузится.
-# -lkmodc++ / -lkmod дают _start/_stop, поднимающие статические C++-объекты.
+# -lkmodc++ / -lkmod дают _start/_stop, поднимающие статические C++-объекты
+# (в них живёт OSDefineMetaClassAndStructors — без их запуска класс не
+# зарегистрируется). Библиотеки лежат ВНУТРИ SDK, а ld сам туда не смотрит,
+# поэтому путь указываем явно.
+KMODLIBS=()
+if [ -f "$SDK/usr/lib/libkmodc++.a" ] && [ -f "$SDK/usr/lib/libkmod.a" ]; then
+    KMODLIBS=(-L"$SDK/usr/lib" -lkmodc++ -lkmod)
+    echo "kmod-библиотеки: $SDK/usr/lib"
+elif [ -f /usr/lib/libkmodc++.a ] && [ -f /usr/lib/libkmod.a ]; then
+    KMODLIBS=(-lkmodc++ -lkmod)
+    echo "kmod-библиотеки: /usr/lib"
+else
+    echo "FAIL: не найдены libkmod/libkmodc++ (искал в $SDK/usr/lib и /usr/lib)."
+    echo "      Без них у kext нет точек входа _start/_stop и статические"
+    echo "      C++-конструкторы не выполнятся. Что есть рядом:"
+    ls -1 "$SDK/usr/lib" 2>/dev/null | grep -i kmod || echo "      (ничего)"
+    exit 1
+fi
+
 KEXTBIN="$OUTDIR/MilcorixFB.bin"
 ld -kext -arch "$ARCH" \
    "$OUTDIR/MilcorixFB.o" "$OUTDIR/fw_blob_macos.o" "$OUTDIR/mfb_klog.o" \
    "$OUTDIR/kmod_info.o" "${CORE_OBJ[@]}" \
-   -lkmodc++ -lkmod \
+   "${KMODLIBS[@]}" \
    -o "$KEXTBIN"
 
 # Санитарная проверка: неопределённых nv_* быть не должно (все закрыты обвязкой/core).
