@@ -148,13 +148,20 @@
 /* Дескриптор ctx-dma Volta+ (gv100_dmaobj_bind, 24б, 16-align, в inst-mem дисплея):
    @0x00 flags0; @0x04 start>>8 lo; @0x08 start>>8 hi; @0x0c limit>>8 lo; @0x10 limit>>8 hi. */
 #define NV_CTXDMA_DESC_SIZE            24u
-/* flags0[1:0] — TARGET (апертура, из которой дисплей читает поверхность). Кодировка
-   gf119_dmaobj_new (nouveau nvkm/engine/dma/usergf119.c): 0=VM(через GMMU),
-   1=VRAM, 2=PCI (sysmem, snooped/когерентно), 3=PCI_NOSNOOP. */
+/* flags0[1:0] — NV_DMA_TARGET_NODE: апертура, из которой дисплей читает поверхность.
+   Кодировка по хедеру NVIDIA (open-gpu-kernel-modules,
+   src/common/inc/swref/published/disp/v03_00/dev_disp.h):
+       1 = PHYSICAL_NVM          — VRAM
+       2 = PHYSICAL_PCI          — системная память БЕЗ snoop'а
+       3 = PHYSICAL_PCI_COHERENT — системная память со snoop'ом (когерентно с CPU)
+   ВНИМАНИЕ: nouveau подписывает значение 3 как PCI_NOSNOOP — это его внутренняя
+   пометка, и она противоречит хедеру вендора. Для scanout из системной памяти нам
+   нужен именно snoop (CPU пишет пиксели в кэшируемую память), поэтому берём 3.
+   flags0[2] — ACCESS (1 = RDWR), flags0[20] — KIND (0 = PITCH). */
 #define NV_CTXDMA_TARGET_VM            0x00000000u
 #define NV_CTXDMA_TARGET_VRAM          0x00000001u
-#define NV_CTXDMA_TARGET_SYSMEM        0x00000002u   /* PCI, snooped — CPU-когерентно */
-#define NV_CTXDMA_TARGET_SYSMEM_NOSNOOP 0x00000003u
+#define NV_CTXDMA_TARGET_SYSMEM_NOSNOOP 0x00000002u
+#define NV_CTXDMA_TARGET_SYSMEM        0x00000003u   /* PCI COHERENT — CPU-когерентно */
 #define NV_CTXDMA_FLAGS0_VRAM          NV_CTXDMA_TARGET_VRAM   /* историческое имя */
 #define NV_CTXDMA_FLAGS0_RW            0x00000004u
 #define NV_CTXDMA_FLAGS0_PAGE_SP       0x00000040u   /* GF119_DMA_V0_PAGE_SP */

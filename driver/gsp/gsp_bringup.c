@@ -157,7 +157,7 @@ int nv_gsp_bringup(const nv_mmio_t *io, nv_dma_arena_t *ar,
                nv_gsp_scanout_t *scan, const nv_gsp_fb_provider_t *fbp)
 {
     if (scan) { scan->fb_phys=0; scan->width=0; scan->height=0; scan->pitch=0;
-                scan->ok=0; scan->fb_sysmem=0; scan->edid_ok=0; }
+                scan->ok=0; scan->fb_target=0; scan->edid_ok=0; }
     uint32_t boot0 = io->rd(io->ctx,0x0);
     nv_log(io, "PMC_BOOT_0 = 0x%08x\n", boot0);
     if (nv_wait_gfw_boot_completed(io,4u*1000000u)!=NV_OK){nv_log(io,"FAIL: GFW boot\n");return -1;}
@@ -906,42 +906,42 @@ int nv_gsp_bringup(const nv_mmio_t *io, nv_dma_arena_t *ar,
                                        (ctx-dma TARGET=SYSMEM, когерентно). */
                                     uint64_t fb2 = 0x14000000ull;
                                     uint32_t fb_target = NV_CTXDMA_TARGET_VRAM;
-                                    int   fb_is_sysmem = 0;
                                     void *fb_va = NULL;
+                                    int   fb_from_platform = 0;
                                     if (fbp && fbp->alloc) {
-                                        uint64_t fp = 0; void *fv = NULL;
-                                        int frc = fbp->alloc(fbp->ctx, w, h, pit, &fp, &fv);
-                                        if (frc == 0 && fp) {
-                                            fb2 = fp; fb_va = fv;
-                                            if (fbp->sysmem) {
-                                                fb_target = NV_CTXDMA_TARGET_SYSMEM;
-                                                fb_is_sysmem = 1;
-                                            }
-                                            nv_log(io, "СЛОЙ 5: FB от платформы @0x%llx (%s) %ux%u pitch=%u va=%p\n",
-                                                   (unsigned long long)fb2,
-                                                   fb_is_sysmem ? "СИСТЕМНАЯ ПАМЯТЬ" : "VRAM",
+                                        uint64_t ga = 0; uint32_t tg = NV_CTXDMA_TARGET_VRAM;
+                                        void *cv = NULL;
+                                        int frc = fbp->alloc(fbp->ctx, w, h, pit, &ga, &tg, &cv);
+                                        if (frc == 0 && ga) {
+                                            fb2 = ga; fb_target = tg; fb_va = cv;
+                                            fb_from_platform = 1;
+                                            nv_log(io, "СЛОЙ 5: FB от платформы @0x%llx target=%u (%s) %ux%u pitch=%u cpu_va=%p\n",
+                                                   (unsigned long long)fb2, tg,
+                                                   (tg == NV_CTXDMA_TARGET_VRAM) ? "VRAM"
+                                                                                 : "системная память",
                                                    w, h, pit, fb_va);
                                         } else {
-                                            /* Платформа не смогла выделить — откатываемся на VRAM.
-                                               fb_is_sysmem остаётся 0, и потребитель (kext) по этому
-                                               признаку НЕ станет публиковать апертуру: адрес VRAM в
-                                               адресном пространстве хоста означал бы запись пикселей
-                                               в чужую системную память. */
-                                            nv_log(io, "СЛОЙ 5: провайдер FB отказал (rc=%d) — откат на VRAM, апертура НЕ будет отдана\n",
+                                            /* Платформа не дала буфер — modeset делать НЕЛЬЗЯ:
+                                               мы бы погасили работающий вывод и не смогли отдать
+                                               ОС ничего взамен. Отступаем, оставив картинку как есть. */
+                                            nv_log(io, "СЛОЙ 5: провайдер FB отказал (rc=%d) — modeset ОТМЕНЁН, вывод не трогаем\n",
                                                    frc);
+                                            goto l5_skip;
                                         }
                                     }
 
                                     /* 1) FB под нативное разрешение (из EDID) — сплошной БЕЛЫЙ
                                        (X8R8G8B8 0x00ffffff): на чёрном "нет сигнала" белый экран
                                        = однозначно наши пиксели. */
-                                    if (fb_is_sysmem && fb_va) {
+                                    if (fb_va) {
+                                        /* Есть прямой CPU-доступ (системная память либо окно BAR1). */
                                         volatile uint32_t *px = (volatile uint32_t *)fb_va;
                                         uint64_t n = fbsz >> 2;
                                         for (uint64_t i = 0; i < n; i++) px[i] = 0x00ffffffu;
                                     } else {
                                         nv_pramin_fill(io, &win, fb2, (uint32_t)fbsz, 0x00ffffffu);
                                     }
+                                    (void)fb_from_platform;
 
                                     /* 2) ctx-dma NV_DMA_IN_MEMORY (весь VRAM, RDWR) — 24б дескриптор в
                                        inst-mem дисплея @disp_inst+0x1000 (после RAMHT). */
@@ -1033,7 +1033,7 @@ int nv_gsp_bringup(const nv_mmio_t *io, nv_dma_arena_t *ar,
                                     if (scan && cdone) {
                                         scan->fb_phys = fb2; scan->width = w;
                                         scan->height = h;    scan->pitch = pit; scan->ok = 1;
-                                        scan->fb_sysmem = fb_is_sysmem;
+                                        scan->fb_target = fb_target;
                                         if (md_edid_ok) {
                                             for (unsigned e = 0; e < sizeof(scan->edid); e++)
                                                 scan->edid[e] = md_edid[e];
@@ -1152,6 +1152,9 @@ int nv_gsp_bringup(const nv_mmio_t *io, nv_dma_arena_t *ar,
                                     /* Дать монитору просинхронизироваться + показать кадр (видно на HDMI).
                                        Только диаг-прогон: под kext картинку гонит WindowServer, пауза не нужна. */
                                     if (dbg) io->udelay(io->ctx, 5000000);
+                                l5_skip: ;
+                                    /* Сюда прыгаем, если платформа не выдала буфер: modeset не
+                                       начинали, вывод остался прежним. */
                                 }
                             }
                         }

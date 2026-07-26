@@ -40,9 +40,8 @@ typedef struct {
     uint32_t width;     /* активные пиксели по горизонтали */
     uint32_t height;    /* активные пиксели по вертикали */
     uint32_t pitch;     /* байт на строку (width*4, X8R8G8B8) */
-    int      fb_sysmem; /* 1 — FB в системной памяти (fb_phys = физадрес хоста,
-                           CPU может писать напрямую); 0 — во VRAM (CPU только
-                           через PRAMIN-окно, для апертуры ОС НЕ годится) */
+    uint32_t fb_target; /* апертура ctx-dma (NV_CTXDMA_TARGET_*), из которой
+                           дисплей реально читает поверхность */
     int      ok;        /* 1 — modeset+scanout запрограммированы */
     uint8_t  edid[128]; /* EDID активного монитора (блок 0), если edid_ok */
     int      edid_ok;
@@ -61,14 +60,21 @@ typedef struct {
  *
  * alloc() вызывается ОДИН раз, уже после разбора EDID (то есть под конкретный
  * режим), до постройки ctx-dma. Возврат 0 — успех.
- *   out_phys — адрес, который увидит GPU (при IOMMU off = физадрес хоста);
- *   out_va   — CPU-адрес того же буфера (для очистки экрана), может быть NULL.
+ *   out_gpu_addr — адрес для дескриптора ctx-dma: смещение во VRAM либо
+ *                  физический адрес хоста — что именно, задаёт out_target;
+ *   out_target   — апертура ctx-dma (NV_CTXDMA_TARGET_VRAM / _SYSMEM);
+ *   out_cpu_va   — CPU-адрес того же буфера (для очистки экрана). Для VRAM это
+ *                  указатель в окно BAR1, для sysmem — обычная память.
+ *                  Может остаться NULL: тогда core зальёт FB через PRAMIN.
+ *
+ * ВАЖНО: адрес CPU-апертуры, которую платформа отдаёт своей ОС, core НЕ
+ * возвращает и знать не должен — платформа хранит его сама. Это намеренно:
+ * так VRAM-адрес физически не может утечь в апертуру ОС.
  */
 typedef struct {
     void *ctx;
     int (*alloc)(void *ctx, uint32_t w, uint32_t h, uint32_t pitch,
-                 uint64_t *out_phys, void **out_va);
-    int sysmem;        /* 1 — буфер в системной памяти → ctx-dma TARGET=SYSMEM */
+                 uint64_t *out_gpu_addr, uint32_t *out_target, void **out_cpu_va);
     int skip_modeset;  /* 1 — НЕ трогать вывод: перечислить дисплеи и выйти.
                           Нужно, чтобы отделить «GSP поднялся» от «мы сломали
                           картинку»: на этой стадии экран остаётся за EFI-FB. */

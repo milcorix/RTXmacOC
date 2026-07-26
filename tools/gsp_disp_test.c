@@ -431,7 +431,9 @@ static void test_ctxdma_and_ramht(void)
     uint8_t dsys[NV_CTXDMA_DESC_SIZE];
     nv_gsp_disp_build_ctxdma_desc(dsys, 0x1234500ull, 0x1234500ull + 0xfffull,
                                   NV_CTXDMA_TARGET_SYSMEM);
-    CHECK(ld32(dsys+0x00) == 0x46u, "flags0 = SYSMEM|RW|PAGE_SP = 0x46");
+    /* Системная память: PHYSICAL_PCI_COHERENT(3) | RDWR(4), без PAGE_SP (его нет
+       в хедере NVIDIA для v03_00). */
+    CHECK(ld32(dsys+0x00) == 0x07u, "flags0 = PCI_COHERENT|RDWR = 0x07");
     CHECK(ld32(dsys+0x04) == (uint32_t)(0x1234500ull>>8), "sysmem start>>8");
 
     uint32_t slot, ctx;

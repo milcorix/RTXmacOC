@@ -24,6 +24,8 @@ extern "C" {
 #include "../gsp/nv_dma.h"
 #include "../gsp/falcon.h"
 #include "../gsp/gsp_bringup.h"
+#include "../gsp/gsp_disp.h"   /* NV_CTXDMA_TARGET_* */
+#include "../gsp/gmmu.h"       /* окно PRAMIN — для проверки identity-маппинга BAR1 */
 }
 
 #define super IOFramebuffer
@@ -64,23 +66,22 @@ static uint64_t mfb_bar_phys(IOPCIDevice *pci, UInt8 reg)
 
 /* Мост от C-ядра к методу класса: провайдер scanout-FB (nv_gsp_fb_provider_t). */
 static int mfb_fb_alloc_cb(void *ctx, uint32_t w, uint32_t h, uint32_t pitch,
-                           uint64_t *out_phys, void **out_va)
+                           uint64_t *out_gpu_addr, uint32_t *out_target, void **out_cpu_va)
 {
     MilcorixFB *self = (MilcorixFB *)ctx;
     if (!self) return -1;
-    return self->allocScanoutFb(w, h, pitch, out_phys, out_va);
+    return self->allocScanoutFb(w, h, pitch, out_gpu_addr, out_target, out_cpu_va);
 }
 
 /* Стадия из boot-arg `milcorix=N`. По умолчанию — OFF: свежеустановленный kext
    не должен менять поведение машины, пока его явно не попросили. */
-static uint32_t mfb_read_stage(void)
+static uint32_t mfb_read_boot_uint(const char *key, uint32_t def, uint32_t max)
 {
-    uint32_t stage = MILCORIX_STAGE_OFF;
     int val = 0;
-    if (PE_parse_boot_argn("milcorix", &val, sizeof(val))) {
-        if (val >= 0 && val <= (int)MILCORIX_STAGE_FULL) stage = (uint32_t)val;
+    if (PE_parse_boot_argn(key, &val, sizeof(val))) {
+        if (val >= 0 && (uint32_t)val <= max) return (uint32_t)val;
     }
-    return stage;
+    return def;
 }
 
 bool MilcorixFB::mapBars(void)
@@ -90,6 +91,69 @@ bool MilcorixFB::mapBars(void)
     fBar0 = (volatile void *)fBar0Map->getVirtualAddress();
     mfb_log(nullptr, "MilcorixFB: BAR0 @%p len=0x%llx\n", fBar0,
             (unsigned long long)fBar0Map->getLength());
+
+    /* BAR1 — апертура VRAM. Не критично для bring-up'а (без неё пойдём через
+       системную память), поэтому провал маппинга не фатален. */
+    fBar1Map = fPci->mapDeviceMemoryWithRegister(kIOPCIConfigBaseAddress1);
+    if (fBar1Map) {
+        fBar1     = (volatile void *)fBar1Map->getVirtualAddress();
+        fBar1Len  = (uint64_t)fBar1Map->getLength();
+        fBar1Phys = mfb_bar_phys(fPci, kIOPCIConfigBaseAddress1);
+        mfb_log(nullptr, "MilcorixFB: BAR1 @%p phys=0x%llx len=0x%llx (%llu МиБ)\n",
+                fBar1, (unsigned long long)fBar1Phys,
+                (unsigned long long)fBar1Len, (unsigned long long)(fBar1Len >> 20));
+    } else {
+        mfb_log(nullptr, "MilcorixFB: BAR1 не замаплен — путь через системную память\n");
+    }
+    return true;
+}
+
+/*
+ * probeBar1Identity — жив ли identity-маппинг «BAR1+X ↔ VRAM offset X».
+ *
+ * UEFI GOP на Ada кладёт консольный фреймбуфер во VRAM и открывает его через
+ * BAR1 identity-маппингом. Но BAR1 транслируется GMMU, а его таблицы после
+ * инициализации GSP-RM принадлежат уже прошивке — верить в маппинг «по
+ * документации» нельзя, его нужно ИЗМЕРИТЬ. Пишем метку во VRAM через окно
+ * PRAMIN и смотрим, видно ли её по BAR1 на том же смещении. Проверяем оба конца
+ * диапазона: начало страницы может быть отображено, а хвост — уже нет.
+ *
+ * Состояние восстанавливается: исходные слова считываются и кладутся назад.
+ */
+bool MilcorixFB::probeBar1Identity(uint64_t vramOff, uint64_t len)
+{
+    if (!fBar1 || !fBar0 || len < 4) return false;
+    if (vramOff + len > fBar1Len) {
+        mfb_log(nullptr, "MilcorixFB: BAR1 окно %llu МиБ мало под FB (%llu КиБ @0x%llx)\n",
+                (unsigned long long)(fBar1Len >> 20), (unsigned long long)(len >> 10),
+                (unsigned long long)vramOff);
+        return false;
+    }
+
+    nv_mmio_t io;
+    io.ctx = (void *)fBar0; io.rd = mfb_rd; io.wr = mfb_wr;
+    io.udelay = mfb_udelay; io.log = mfb_log;
+    uint64_t win = ~0ull;   /* окно PRAMIN ещё не позиционировано */
+
+    const uint32_t kMagicA = 0x4D494C43u;   /* 'MILC' */
+    const uint32_t kMagicB = 0x46423031u;   /* 'FB01' */
+    uint64_t offs[2] = { vramOff, vramOff + len - 4u };
+    uint32_t magic[2] = { kMagicA, kMagicB };
+
+    for (int i = 0; i < 2; i++) {
+        uint32_t orig = nv_pramin_rd32(&io, &win, offs[i]);
+        nv_pramin_wr32(&io, &win, offs[i], magic[i]);
+        /* Чтение по BAR1 — MMIO, компилятор не должен его выбрасывать. */
+        uint32_t seen = *(volatile uint32_t *)((volatile uint8_t *)fBar1 + offs[i]);
+        nv_pramin_wr32(&io, &win, offs[i], orig);
+        if (seen != magic[i]) {
+            mfb_log(nullptr, "MilcorixFB: BAR1 identity НЕ подтверждён @0x%llx (записали 0x%08x, видим 0x%08x)\n",
+                    (unsigned long long)offs[i], magic[i], seen);
+            return false;
+        }
+    }
+    mfb_log(nullptr, "MilcorixFB: BAR1 identity ПОДТВЕРЖДЁН для VRAM 0x%llx..0x%llx\n",
+            (unsigned long long)vramOff, (unsigned long long)(vramOff + len));
     return true;
 }
 
@@ -145,25 +209,53 @@ bool MilcorixFB::allocDmaArena(void)
  * записи CPU видны движку без явного flush'а.
  */
 int MilcorixFB::allocScanoutFb(uint32_t w, uint32_t h, uint32_t pitch,
-                               uint64_t *outPhys, void **outVa)
+                               uint64_t *outGpuAddr, uint32_t *outTarget, void **outCpuVa)
 {
-    if (!outPhys) return -1;
-    *outPhys = 0;
-    if (outVa) *outVa = nullptr;
+    if (!outGpuAddr || !outTarget) return -1;
+    *outGpuAddr = 0; *outTarget = NV_CTXDMA_TARGET_VRAM;
+    if (outCpuVa) *outCpuVa = nullptr;
     if (!w || !h || !pitch) return -1;
 
     uint64_t bytes = (uint64_t)pitch * (uint64_t)h;
-    /* Округляем до страницы — дескриптор ctx-dma адресует с гранулярностью 256 б,
-       но маппинг в userspace всё равно постраничный. */
-    bytes = (bytes + 0xFFFFull) & ~0xFFFFull;
+    bytes = (bytes + 0xFFFFull) & ~0xFFFFull;    /* округление до 64 КиБ */
     if (bytes > 128ull * 1024ull * 1024ull) {
         mfb_log(nullptr, "MilcorixFB: режим %ux%u требует %llu МиБ — отказ\n",
                 w, h, (unsigned long long)(bytes >> 20));
         return -1;
     }
 
-    if (fFbBuf) freeScanoutFb();
+    freeScanoutFb();
 
+    /* --- Путь 1: VRAM через identity-окно BAR1 ---
+       Берём VRAM offset 0 — именно там UEFI GOP держит консольный фреймбуфер, то
+       есть это единственное место, про которое достоверно известно, что оно
+       отображено в BAR1. Заодно приятное свойство: если наш modeset не
+       состоится, по этому адресу продолжит сканироваться консоль EFI. */
+    if (fFbMode != MILCORIX_FBMODE_SYSMEM && fBar1) {
+        const uint64_t kVramOff = 0;
+        if (probeBar1Identity(kVramOff, bytes)) {
+            fFbGpuAddr       = kVramOff;
+            fFbTarget        = NV_CTXDMA_TARGET_VRAM;
+            fApertureCpuPhys = fBar1Phys + kVramOff;
+            fApertureLen     = bytes;
+
+            *outGpuAddr = kVramOff;
+            *outTarget  = NV_CTXDMA_TARGET_VRAM;
+            if (outCpuVa) *outCpuVa = (void *)((volatile uint8_t *)fBar1 + kVramOff);
+
+            mfb_log(nullptr, "MilcorixFB: scanout-FB во VRAM@0x%llx через BAR1, "
+                             "CPU-апертура phys=0x%llx %ux%u pitch=%u (%llu КиБ)\n",
+                    (unsigned long long)kVramOff, (unsigned long long)fApertureCpuPhys,
+                    w, h, pitch, (unsigned long long)(bytes >> 10));
+            return 0;
+        }
+    }
+    if (fFbMode == MILCORIX_FBMODE_BAR1) {
+        mfb_log(nullptr, "MilcorixFB: запрошен только BAR1, а identity-окна нет — отказ\n");
+        return -1;
+    }
+
+    /* --- Путь 2: системная память, дисплей читает её по PCIe --- */
     IOOptionBits opts = kIODirectionInOut | kIOMemoryPhysicallyContiguous;
     mach_vm_address_t physMask = 0x00000000FFFFF000ULL;   /* < 4 ГиБ, как арена */
 
@@ -190,14 +282,17 @@ int MilcorixFB::allocScanoutFb(uint32_t w, uint32_t h, uint32_t pitch,
     }
 
     bzero(va, bytes);
-    fFbVa = va; fFbPhys = (uint64_t)phys; fFbBytes = bytes;
+    fFbGpuAddr       = (uint64_t)phys;
+    fFbTarget        = NV_CTXDMA_TARGET_SYSMEM;
+    fApertureCpuPhys = (uint64_t)phys;      /* та же память — CPU и GPU видят одно */
+    fApertureLen     = bytes;
 
     mfb_log(nullptr, "MilcorixFB: scanout-FB в СИСТЕМНОЙ памяти VA=%p phys=0x%llx %ux%u pitch=%u (%llu КиБ)\n",
-            va, (unsigned long long)fFbPhys, w, h, pitch,
-            (unsigned long long)(bytes >> 10));
+            va, (unsigned long long)phys, w, h, pitch, (unsigned long long)(bytes >> 10));
 
-    *outPhys = fFbPhys;
-    if (outVa) *outVa = va;
+    *outGpuAddr = (uint64_t)phys;
+    *outTarget  = NV_CTXDMA_TARGET_SYSMEM;
+    if (outCpuVa) *outCpuVa = va;
     return 0;
 }
 
@@ -208,7 +303,8 @@ void MilcorixFB::freeScanoutFb(void)
         fFbBuf->release();
         fFbBuf = nullptr;
     }
-    fFbVa = nullptr; fFbPhys = 0; fFbBytes = 0; fFbSysmem = false;
+    fFbGpuAddr = 0; fFbTarget = 0;
+    fApertureCpuPhys = 0; fApertureLen = 0;
 }
 
 bool MilcorixFB::gspBringUp(void)
@@ -239,12 +335,13 @@ bool MilcorixFB::gspBringUp(void)
     nv_gsp_fb_provider_t fbp;
     fbp.ctx          = this;
     fbp.alloc        = (fStage >= MILCORIX_STAGE_FULL) ? mfb_fb_alloc_cb : nullptr;
-    fbp.sysmem       = 1;
     fbp.skip_modeset = (fStage < MILCORIX_STAGE_FULL) ? 1 : 0;
 
     /* dbg=nullptr: в ядре некуда дампить бинарные логи, и это же отключает
        секундные диагностические паузы, которые повесили бы старт. */
     nv_gsp_scanout_t scan;
+    /* С этого момента прошивка живёт в арене — освобождать её больше нельзя. */
+    fGspRunning = true;
     int rc = nv_gsp_bringup(&io, &arena, &pci, /*dbg=*/nullptr, &scan, &fbp);
     if (rc != 0) {
         mfb_log(nullptr, "MilcorixFB: gspBringUp FAIL (rc=%d)\n", rc);
@@ -252,27 +349,26 @@ bool MilcorixFB::gspBringUp(void)
     }
 
     if (scan.ok) {
-        /* ЗАЩИТА: апертуру принимаем ТОЛЬКО если FB реально в системной памяти.
-           Адрес VRAM здесь означал бы запись пикселей в чужую RAM. */
-        if (!scan.fb_sysmem) {
-            mfb_log(nullptr, "MilcorixFB: scanout во VRAM (0x%llx) — апертуру НЕ публикуем "
-                             "(этот адрес не в адресном пространстве хоста)\n",
-                    (unsigned long long)scan.fb_phys);
-            fModeset = false; fFbSysmem = false;
+        /* ЗАЩИТА: апертуру публикуем только если МЫ САМИ её посчитали в
+           allocScanoutFb. Адрес из core — это адрес для GPU (возможно VRAM), и
+           в getApertureRange ему делать нечего. */
+        if (!fApertureCpuPhys || !fApertureLen) {
+            mfb_log(nullptr, "MilcorixFB: modeset прошёл, но CPU-апертуры нет — не публикуем\n");
+            fModeset = false;
             return true;
         }
-        fFbPhys   = scan.fb_phys;
-        fWidth    = scan.width;
-        fHeight   = scan.height;
-        fPitch    = scan.pitch;
-        fFbSysmem = true;
-        fModeset  = true;
+        fWidth   = scan.width;
+        fHeight  = scan.height;
+        fPitch   = scan.pitch;
+        fModeset = true;
         if (scan.edid_ok) {
             memcpy(fEdid, scan.edid, sizeof(fEdid));
             fEdidOk = true;
         }
-        mfb_log(nullptr, "MilcorixFB: gspBringUp OK — GSP-RM active, scanout %ux%u pitch=%u fb=0x%llx (sysmem)\n",
-                fWidth, fHeight, fPitch, (unsigned long long)fFbPhys);
+        mfb_log(nullptr, "MilcorixFB: gspBringUp OK — GSP-RM active, scanout %ux%u pitch=%u "
+                         "gpu=0x%llx target=%u, CPU-апертура phys=0x%llx\n",
+                fWidth, fHeight, fPitch, (unsigned long long)scan.fb_phys, scan.fb_target,
+                (unsigned long long)fApertureCpuPhys);
     } else {
         mfb_log(nullptr, "MilcorixFB: gspBringUp OK — GSP-RM active, modeset не выполнен%s\n",
                 fStage < MILCORIX_STAGE_FULL ? " (стадия bring-up)" : " (нет EDID/SOR?)");
@@ -301,12 +397,15 @@ bool MilcorixFB::start(IOService *provider)
 {
     /* Обнулить состояние (ivar'ы kext не гарантированно занулены). */
     fPci = nullptr; fBar0Map = nullptr; fBar0 = nullptr; fFbMem = nullptr;
+    fBar1Map = nullptr; fBar1 = nullptr; fBar1Phys = 0; fBar1Len = 0;
     fDmaBuf = nullptr;  fArenaVa = nullptr; fArenaPhys = 0; fArenaSize = 0;
-    fFbBuf = nullptr;   fFbVa = nullptr;    fFbPhys = 0;    fFbBytes = 0;
-    fFbSysmem = false;  fModeset = false;   fEdidOk = false;
+    fFbBuf = nullptr;   fFbGpuAddr = 0;     fFbTarget = 0;
+    fApertureCpuPhys = 0; fApertureLen = 0;
+    fModeset = false;   fEdidOk = false;    fGspRunning = false;
     fWidth = 1280; fHeight = 1024; fPitch = fWidth * 4u;
 
-    fStage = mfb_read_stage();
+    fStage  = mfb_read_boot_uint("milcorix",   MILCORIX_STAGE_OFF,   MILCORIX_STAGE_FULL);
+    fFbMode = mfb_read_boot_uint("milcorixfb", MILCORIX_FBMODE_AUTO, MILCORIX_FBMODE_SYSMEM);
     if (fStage == MILCORIX_STAGE_OFF) {
         /* Явно выключен — молча уступаем EFI-фреймбуферу. Это дефолт: установка
            kext'а сама по себе не должна менять поведение машины. */
@@ -315,7 +414,7 @@ bool MilcorixFB::start(IOService *provider)
     }
 
     mfb_klog_init();
-    mfb_klog_printf("=== MilcorixFB: старт, стадия %u ===\n", fStage);
+    mfb_klog_printf("=== MilcorixFB: старт, стадия %u, режим FB %u ===\n", fStage, fFbMode);
     mfb_klog_status("start");
 
     fPci = OSDynamicCast(IOPCIDevice, provider);
@@ -323,7 +422,7 @@ bool MilcorixFB::start(IOService *provider)
 
     fPci->setMemoryEnable(true);
     fPci->setBusMasterEnable(true);   /* GSP DMA читает арену из sysmem */
-    if (!mapBars()) { mfb_klog_status("fail:bar0"); mfb_klog_flush(); return false; }
+    if (!mapBars()) { mfb_klog_status("fail:bar0"); mfb_klog_flush(); teardown(); return false; }
 
     /* --- Железо поднимаем ДО super::start(): пока мы не знаем, что получили
        годный фреймбуфер, становиться фреймбуфером системы нельзя. --- */
@@ -334,8 +433,7 @@ bool MilcorixFB::start(IOService *provider)
                          "экран остаётся за EFI-фреймбуфером\n");
         mfb_klog_status("fail:bringup");
         mfb_klog_flush();
-        freeScanoutFb(); freeDmaArena();
-        if (fBar0Map) { fBar0Map->release(); fBar0Map = nullptr; }
+        teardown();
         return false;
     }
 
@@ -346,16 +444,17 @@ bool MilcorixFB::start(IOService *provider)
                          "не подключаюсь как фреймбуфер\n", fStage);
         mfb_klog_status("ok:bringup-only");
         mfb_klog_flush();
+        teardown();
         return false;
     }
 
-    if (!fModeset || !fFbSysmem || !fFbPhys) {
-        mfb_log(nullptr, "MilcorixFB: годной scanout-апертуры нет (modeset=%d sysmem=%d) — "
-                         "НЕ подключаюсь\n", (int)fModeset, (int)fFbSysmem);
+    if (!fModeset || !fApertureCpuPhys || !fApertureLen) {
+        mfb_log(nullptr, "MilcorixFB: годной scanout-апертуры нет (modeset=%d apert=0x%llx) — "
+                         "НЕ подключаюсь\n", (int)fModeset,
+                (unsigned long long)fApertureCpuPhys);
         mfb_klog_status("fail:no-aperture");
         mfb_klog_flush();
-        freeScanoutFb(); freeDmaArena();
-        if (fBar0Map) { fBar0Map->release(); fBar0Map = nullptr; }
+        teardown();
         return false;
     }
 
@@ -367,15 +466,33 @@ bool MilcorixFB::start(IOService *provider)
     }
 
     mfb_log(nullptr, "MilcorixFB: start OK (RTX 4070S, milcorix-1.0) — фреймбуфер %ux%u @0x%llx\n",
-            fWidth, fHeight, (unsigned long long)fFbPhys);
+            fWidth, fHeight, (unsigned long long)fApertureCpuPhys);
     {
         char st[128];
         snprintf(st, sizeof(st), "ok:fb %ux%u pitch=%u phys=0x%llx",
-                 fWidth, fHeight, fPitch, (unsigned long long)fFbPhys);
+                 fWidth, fHeight, fPitch, (unsigned long long)fApertureCpuPhys);
         mfb_klog_status(st);
     }
     mfb_klog_flush();
     return true;
+}
+
+/*
+ * teardown — отпустить ресурсы хоста на неуспешных путях. Арена освобождается
+ * ТОЛЬКО если GSP-RM не стартовал: после старта прошивка продолжает писать в неё
+ * по DMA, и возврат этих страниц ядру = порча чужой памяти.
+ */
+void MilcorixFB::teardown(void)
+{
+    freeScanoutFb();
+    if (!fGspRunning) {
+        freeDmaArena();
+    } else if (fDmaBuf) {
+        mfb_log(nullptr, "MilcorixFB: DMA-арена НЕ освобождается — GSP-RM работает и пишет в неё\n");
+    }
+    if (fFbMem)   { fFbMem->release();   fFbMem = nullptr; }
+    if (fBar1Map) { fBar1Map->release(); fBar1Map = nullptr; fBar1 = nullptr; }
+    if (fBar0Map) { fBar0Map->release(); fBar0Map = nullptr; fBar0 = nullptr; }
 }
 
 void MilcorixFB::freeDmaArena(void)
@@ -391,10 +508,7 @@ void MilcorixFB::freeDmaArena(void)
 void MilcorixFB::stop(IOService *provider)
 {
     mfb_klog_flush();
-    freeScanoutFb();
-    freeDmaArena();
-    if (fFbMem)   { fFbMem->release();   fFbMem = nullptr; }
-    if (fBar0Map) { fBar0Map->release(); fBar0Map = nullptr; }
+    teardown();
     mfb_klog_free();
     super::stop(provider);
 }
@@ -404,7 +518,7 @@ IOReturn MilcorixFB::enableController(void)
     /* Железо уже поднято в start() — сюда мы доходим только когда есть годный
        scanout в системной памяти. Остаётся подтвердить готовность. */
     mfb_klog_flush_lazy();
-    if (!fModeset || !fFbSysmem || !fFbPhys) return kIOReturnNotReady;
+    if (!fModeset || !fApertureCpuPhys) return kIOReturnNotReady;
     return kIOReturnSuccess;
 }
 
@@ -480,14 +594,14 @@ IODeviceMemory * MilcorixFB::getApertureRange(IOPixelAperture aperture)
     if (aperture != kIOFBSystemAperture) return nullptr;
     /* Отдаём ТОЛЬКО буфер в системной памяти. Без этой проверки сюда уехал бы
        VRAM-адрес, а WindowServer писал бы пиксели в чужую физическую RAM. */
-    if (!fFbSysmem || !fFbPhys || !fFbBytes) {
-        IOLog("MilcorixFB: getApertureRange — годного sysmem-FB нет, отказ\n");
+    if (!fApertureCpuPhys || !fApertureLen) {
+        IOLog("MilcorixFB: getApertureRange — CPU-апертуры нет, отказ\n");
         return nullptr;
     }
     uint64_t len = (uint64_t)fPitch * fHeight;
-    if (len > fFbBytes) len = fFbBytes;
+    if (len > fApertureLen) len = fApertureLen;
     if (!fFbMem)
-        fFbMem = IODeviceMemory::withRange(fFbPhys, len);
+        fFbMem = IODeviceMemory::withRange(fApertureCpuPhys, len);
     if (fFbMem) fFbMem->retain();
     return fFbMem;
 }

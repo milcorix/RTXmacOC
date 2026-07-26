@@ -416,8 +416,14 @@ void nv_gsp_disp_build_ctxdma_desc(uint8_t *desc, uint64_t start, uint64_t limit
     if (!desc) return;
     for (unsigned i = 0; i < NV_CTXDMA_DESC_SIZE; i++) desc[i] = 0;
     uint64_t s = start >> 8, l = limit >> 8;
-    /* flags0 = TARGET[1:0] | RW | PAGE_SP; kind=PITCH(0) в старших битах. */
-    st32(desc + 0x00, (target & 0x3u) | NV_CTXDMA_FLAGS0_RW | NV_CTXDMA_FLAGS0_PAGE_SP);
+    /* flags0 = TARGET[1:0] | ACCESS_RDWR[2] (| PAGE_SP для VRAM); KIND=PITCH(0).
+       Бит PAGE_SP есть в кодировке nouveau для gf119, но его НЕТ в хедере NVIDIA
+       для v03_00 (Volta+). На VRAM-пути он выставлен и проверен на железе — не
+       трогаем то, что работает; для системной памяти следуем хедеру вендора. */
+    uint32_t flags0 = (target & 0x3u) | NV_CTXDMA_FLAGS0_RW;
+    if ((target & 0x3u) == NV_CTXDMA_TARGET_VRAM)
+        flags0 |= NV_CTXDMA_FLAGS0_PAGE_SP;
+    st32(desc + 0x00, flags0);
     st32(desc + 0x04, (uint32_t)(s & 0xffffffffu));
     st32(desc + 0x08, (uint32_t)(s >> 32));
     st32(desc + 0x0c, (uint32_t)(l & 0xffffffffu));

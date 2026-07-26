@@ -46,6 +46,24 @@
                                         дисплей остаётся на EFI-фреймбуфере */
 #define MILCORIX_STAGE_FULL     2u   /* + modeset и публикация нашей апертуры */
 
+/*
+ * Откуда берётся scanout-буфер (boot-arg `milcorixfb=N`).
+ *
+ * BAR1 — предпочтительный путь. На Ada EFI GOP кладёт консольный фреймбуфер во
+ * VRAM и показывает его через BAR1 с identity-маппингом (VRAM offset X виден по
+ * BAR1+X). То есть CPU-видимая линейная апертура уже существует, а scanout идёт
+ * из VRAM — ровно тот путь, что доказан на железе под Linux. Живость окна
+ * проверяется на старте (probeBar1Identity), потому что после инициализации
+ * GSP-RM маппинг мог измениться.
+ *
+ * SYSMEM — запасной путь: буфер в обычной системной памяти, дисплей читает его
+ * по PCIe (ctx-dma PHYSICAL_PCI_COHERENT). Не требует BAR1 вообще, но нагружает
+ * шину и на dGPU в открытых исходниках не подтверждён.
+ */
+#define MILCORIX_FBMODE_AUTO    0u   /* BAR1, если identity-окно живо; иначе sysmem */
+#define MILCORIX_FBMODE_BAR1    1u   /* только BAR1 (без него — отказ) */
+#define MILCORIX_FBMODE_SYSMEM  2u   /* только системная память */
+
 class MilcorixFB : public IOFramebuffer
 {
     OSDeclareDefaultStructors(MilcorixFB);
@@ -86,34 +104,52 @@ public:
 
     // --- колбэк провайдера FB для переносимого core (см. nv_gsp_fb_provider_t) ---
     int  allocScanoutFb(uint32_t w, uint32_t h, uint32_t pitch,
-                        uint64_t *outPhys, void **outVa);
+                        uint64_t *outGpuAddr, uint32_t *outTarget, void **outCpuVa);
 
 private:
     IOPCIDevice          *fPci;        // провайдер
     IOMemoryMap          *fBar0Map;    // маппинг регистров (BAR0)
     volatile void        *fBar0;       // база регистров
-    IODeviceMemory       *fFbMem;      // апертура scanout (ТОЛЬКО системная память)
+    IOMemoryMap          *fBar1Map;    // маппинг апертуры VRAM (BAR1)
+    volatile void        *fBar1;       // CPU-база окна BAR1
+    uint64_t              fBar1Phys;   // физ. база BAR1 (её отдаём как апертуру)
+    uint64_t              fBar1Len;    // длина окна BAR1 (на Ada обычно 256 МиБ)
+
+    IODeviceMemory       *fFbMem;      // опубликованная апертура scanout
     IOBufferMemoryDescriptor *fDmaBuf; // DMA-арена bring-up (физически непрерывная)
     void                 *fArenaVa;    // CPU-адрес арены
     uint64_t              fArenaPhys;  // физ-адрес арены (= IOVA для GSP, IOMMU off)
     uint64_t              fArenaSize;  // размер арены
 
-    IOBufferMemoryDescriptor *fFbBuf;  // scanout-FB в СИСТЕМНОЙ памяти
-    void                 *fFbVa;       // CPU-адрес FB (сюда пишет WindowServer)
-    uint64_t              fFbPhys;     // физ-адрес FB (его читает дисплей по PCIe)
-    uint64_t              fFbBytes;    // размер выделенного FB
+    IOBufferMemoryDescriptor *fFbBuf;  // scanout-FB, если он в СИСТЕМНОЙ памяти
+    uint64_t              fFbGpuAddr;  // адрес, из которого читает дисплей (VRAM-offset либо физ.)
+    uint32_t              fFbTarget;   // апертура ctx-dma (NV_CTXDMA_TARGET_*)
+
+    /* CPU-сторона апертуры: физический адрес, который получает ОС. Считается
+       САМИМ kext'ом и никогда не выводится из адреса, вернувшегося из core —
+       так VRAM-адрес не может случайно уехать в getApertureRange. */
+    uint64_t              fApertureCpuPhys;
+    uint64_t              fApertureLen;
 
     uint32_t              fStage;      // MILCORIX_STAGE_*
+    uint32_t              fFbMode;     // MILCORIX_FBMODE_*
     uint32_t              fWidth, fHeight, fPitch;   // текущий режим (из EDID)
-    bool                  fFbSysmem;   // FB реально в системной памяти → апертуру можно отдавать
     bool                  fModeset;    // слой 5 запрограммирован (scan.ok)
     uint8_t               fEdid[128];  // EDID блок 0 активного монитора
     bool                  fEdidOk;
+
+    /* GSP-RM запущен и продолжает работать. Пока это так, DMA-арену освобождать
+       НЕЛЬЗЯ: в ней лежат очереди RPC и логи, куда прошивка пишет по DMA. Отдать
+       эти страницы обратно ядру — значит получить порчу чужой памяти, то есть
+       ровно тот класс бага, из-за которого всё и началось. */
+    bool                  fGspRunning;
 
     bool  mapBars(void);
     bool  allocDmaArena(void);    // выделить физически непрерывную DMA-арену
     void  freeDmaArena(void);     // освободить DMA-арену
     void  freeScanoutFb(void);    // освободить scanout-FB
+    bool  probeBar1Identity(uint64_t vramOff, uint64_t len);  // живо ли identity-окно BAR1
+    void  teardown(void);         // отпустить ресурсы хоста (арену — только если GSP не запущен)
     bool  gspBringUp(void);       // слои 2–5 через переносимый core (nv_mmio_t)
     bool  modeset(uint32_t w, uint32_t h);  // GSP-modeset на режим
 };
