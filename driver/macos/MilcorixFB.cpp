@@ -938,16 +938,16 @@ IOReturn MilcorixFB::gpuCopy(uint64_t srcOffset, uint64_t dstOffset, uint32_t by
  * WindowServer, и вмешиваться в них означало бы сломать рабочий стол.
  */
 IOReturn MilcorixFB::newUserClient(task_t owningTask, void *securityID, UInt32 type,
-                                   OSDictionary *properties, IOUserClient **handler)
+                                   IOUserClient **handler)
 {
     if (type != MILCORIX_CONNECT_TYPE)
-        return super::newUserClient(owningTask, securityID, type, properties, handler);
+        return super::newUserClient(owningTask, securityID, type, handler);
 
     if (!handler) return kIOReturnBadArgument;
     MilcorixUserClient *uc = OSTypeAlloc(MilcorixUserClient);
     if (!uc) return kIOReturnNoMemory;
 
-    if (!uc->initWithTask(owningTask, securityID, type, properties) || !uc->attach(this)) {
+    if (!uc->initWithTask(owningTask, securityID, type, nullptr) || !uc->attach(this)) {
         uc->release();
         return kIOReturnInternalError;
     }

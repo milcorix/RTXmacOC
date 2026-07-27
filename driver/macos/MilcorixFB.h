@@ -77,8 +77,10 @@ public:
     // --- IOService ---
     virtual bool     start(IOService *provider) override;
     virtual void     stop(IOService *provider) override;
+    /* Переопределяем ИМЕННО 4-аргументный вариант: его переопределяет и сам
+       IOFramebuffer, а 5-аргументный в этой иерархии не виртуален так, как
+       ожидалось. */
     virtual IOReturn newUserClient(task_t owningTask, void *securityID, UInt32 type,
-                                   OSDictionary *properties,
                                    IOUserClient **handler) override;
 
     /*
