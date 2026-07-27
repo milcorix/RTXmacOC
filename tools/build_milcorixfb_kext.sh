@@ -37,6 +37,7 @@ CXXFLAGS=(-arch "$ARCH" -isysroot "$SDK" -I"$KHDR" -I"$KPHDR"
 clang++ -x c++ -c driver/macos/MilcorixFB.cpp   "${CXXFLAGS[@]}" -o "$OUTDIR/MilcorixFB.o"
 clang++ -x c++ -c driver/macos/fw_blob_macos.cpp "${CXXFLAGS[@]}" -o "$OUTDIR/fw_blob_macos.o"
 clang++ -x c++ -c driver/macos/mfb_klog.cpp      "${CXXFLAGS[@]}" -o "$OUTDIR/mfb_klog.o"
+clang++ -x c++ -c driver/macos/MilcorixUserClient.cpp "${CXXFLAGS[@]}" -o "$OUTDIR/MilcorixUserClient.o"
 
 # --- 2. Переносимое ядро GSP как kernel-C -------------------------------------
 CFLAGS=(-arch "$ARCH" -isysroot "$SDK" -I"$KHDR"
@@ -96,7 +97,7 @@ fi
 KEXTBIN="$OUTDIR/MilcorixFB.bin"
 ld -kext -arch "$ARCH" \
    "$OUTDIR/MilcorixFB.o" "$OUTDIR/fw_blob_macos.o" "$OUTDIR/mfb_klog.o" \
-   "$OUTDIR/kmod_info.o" "${CORE_OBJ[@]}" \
+   "$OUTDIR/MilcorixUserClient.o" "$OUTDIR/kmod_info.o" "${CORE_OBJ[@]}" \
    "${KMODLIBS[@]}" \
    -o "$KEXTBIN"
 

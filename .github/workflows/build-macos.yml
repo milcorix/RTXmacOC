@@ -143,6 +143,30 @@ jobs:
             -o build/mfb_klog.o
           echo "OK: mfb_klog (журнал bring-up'а компилируется)"
 
+      - name: Build layer-6 user client (граница userspace ↔ GPU)
+        run: |
+          mkdir -p build
+          SDK="$(xcrun --sdk macosx --show-sdk-path)"
+          clang++ -x c++ -c driver/macos/MilcorixUserClient.cpp \
+            -arch x86_64 \
+            -isysroot "$SDK" \
+            -I"$SDK/System/Library/Frameworks/Kernel.framework/Headers" \
+            -I"$SDK/System/Library/Frameworks/Kernel.framework/PrivateHeaders" \
+            -fapple-kext -fno-builtin -fno-exceptions -fno-rtti -fno-common \
+            -DKERNEL -DKERNEL_PRIVATE -DDRIVER_PRIVATE -DAPPLE -DNeXT \
+            -std=gnu++17 \
+            -o build/MilcorixUserClient.o
+          echo "OK: MilcorixUserClient (IOUserClient слоя 6)"
+
+      - name: Build layer-6 userspace tool (milcorix_gpu)
+        run: |
+          mkdir -p build
+          # Утилита, которой пользователь запускает работу на видеокарте.
+          clang -O2 -Wall -Wextra tools/milcorix_gpu.c \
+            -framework IOKit -framework CoreFoundation \
+            -o build/milcorix_gpu
+          echo "OK: milcorix_gpu (userspace)"
+
       - name: Link full MilcorixFB kext (symbols resolve — walls 1-3 closed)
         run: |
           mkdir -p build
@@ -162,7 +186,8 @@ jobs:
             CORE_OBJ="$CORE_OBJ $o"
           done
           ld -r -arch x86_64 \
-            build/MilcorixFB.o build/fw_blob_macos.o build/mfb_klog.o $CORE_OBJ \
+            build/MilcorixFB.o build/fw_blob_macos.o build/mfb_klog.o \
+            build/MilcorixUserClient.o $CORE_OBJ \
             -o build/MilcorixFB.kext.o
           echo "=== undefined symbols (ожидаем только IOKit/Kernel KPI) ==="
           nm -u build/MilcorixFB.kext.o | sort | tee build/undef.txt

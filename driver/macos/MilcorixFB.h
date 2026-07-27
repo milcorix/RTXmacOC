@@ -77,6 +77,9 @@ public:
     // --- IOService ---
     virtual bool     start(IOService *provider) override;
     virtual void     stop(IOService *provider) override;
+    virtual IOReturn newUserClient(task_t owningTask, void *securityID, UInt32 type,
+                                   OSDictionary *properties,
+                                   IOUserClient **handler) override;
 
     /*
      * ВАЖНО: enableController СОЗНАТЕЛЬНО НЕ переопределён.
@@ -129,6 +132,18 @@ public:
     virtual IOReturn getDDCBlock(IOIndex connectIndex, UInt32 blockNumber,
                                  IOSelect blockType, IOOptionBits options,
                                  UInt8 *data, IOByteCount *length) override;
+
+    /* --- Операции слоя 6, доступные пользовательскому клиенту ---
+       Данные ходят через окно PRAMIN: замапленная область контекста лежит во
+       VRAM, а BAR1 сейчас открывает только консольный регион. Медленно, но
+       честно и без единого нового допущения о железе. Когда включат Resizable
+       BAR, эти же операции заменятся прямым маппингом. */
+    bool     gpuReady(void) const { return fGpu.ok; }
+    uint64_t gpuScratchSize(void) const { return fGpu.scratch_size; }
+    IOReturn gpuWrite(uint64_t offset, const void *data, uint32_t len);
+    IOReturn gpuRead(uint64_t offset, void *data, uint32_t len);
+    IOReturn gpuCopy(uint64_t srcOffset, uint64_t dstOffset, uint32_t bytes,
+                     uint64_t *outNanos);
 
     // --- колбэк провайдера FB для переносимого core (см. nv_gsp_fb_provider_t) ---
     int  allocScanoutFb(uint32_t w, uint32_t h, uint32_t pitch,
@@ -186,6 +201,7 @@ private:
     void  teardown(void);         // отпустить ресурсы хоста (арену — только если GSP не запущен)
     bool  gspBringUp(void);       // слои 2–5 через переносимый core (nv_mmio_t)
     void  runGpuSelfTest(void);   // слой 6: реальная GPU-копия через наш же канал
+    bool  gpuRegionOk(uint64_t offset, uint32_t len) const;  // границы области данных
     bool  modeset(uint32_t w, uint32_t h);  // GSP-modeset на режим
 };
 

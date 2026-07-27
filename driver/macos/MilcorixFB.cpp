@@ -10,12 +10,14 @@
  */
 #include "MilcorixFB.h"
 #include "mfb_klog.h"
+#include "MilcorixUserClient.h"
 #include <IOKit/IOLib.h>
 #include <IOKit/IODeviceMemory.h>
 #include <IOKit/IOBufferMemoryDescriptor.h>
 #include <IOKit/pci/IOPCIDevice.h>
 #include <IOKit/IOPlatformExpert.h>
 #include <pexpert/pexpert.h>
+#include <kern/clock.h>
 #include <stdarg.h>
 
 /* Переносимое ядро GSP — чистый C, компилируется как kernel-C. В C++-TU его
@@ -823,5 +825,137 @@ IOReturn MilcorixFB::getDDCBlock(IOIndex connectIndex, UInt32 blockNumber,
     if (want > sizeof(fEdid)) want = sizeof(fEdid);
     memcpy(data, fEdid, want);
     *length = want;
+    return kIOReturnSuccess;
+}
+
+/* ===================== Слой 6: операции для пользовательского клиента =====================
+ *
+ * Три примитива, которых достаточно, чтобы обычная программа заставила
+ * видеокарту работать: положить данные, попросить GPU их обработать, забрать
+ * результат. Обработка пока одна — копирование движком CE, но путь отправки
+ * общий, и следующая операция ляжет туда же.
+ *
+ * Данные ходят через окно PRAMIN по 32 бита: замапленная область контекста
+ * живёт во VRAM, а BAR1 сейчас раскрыт только на консольный регион. Это
+ * медленно и это осознанный компромисс — зато ни одного нового допущения о
+ * железе. При включённом Resizable BAR вся VRAM станет видна процессору
+ * линейно, и эти же операции превратятся в обычный memcpy.
+ */
+
+/* Общая обвязка: собрать nv_mmio_t и проверить границы области. */
+bool MilcorixFB::gpuRegionOk(uint64_t offset, uint32_t len) const
+{
+    if (!fGpu.ok || !len) return false;
+    if (offset > fGpu.scratch_size) return false;
+    if ((uint64_t)len > fGpu.scratch_size - offset) return false;
+    return true;
+}
+
+IOReturn MilcorixFB::gpuWrite(uint64_t offset, const void *data, uint32_t len)
+{
+    if (!data || !gpuRegionOk(offset, len)) return kIOReturnBadArgument;
+
+    nv_mmio_t io;
+    io.ctx = (void *)fBar0; io.rd = mfb_rd; io.wr = mfb_wr;
+    io.udelay = mfb_udelay; io.log = mfb_log;
+    uint64_t win = ~0ull;
+
+    const uint8_t *src = (const uint8_t *)data;
+    uint64_t phys = fGpu.scratch_phys + offset;
+    uint32_t i = 0;
+    for (; i + 4 <= len; i += 4) {
+        uint32_t w = (uint32_t)src[i] | ((uint32_t)src[i+1] << 8)
+                   | ((uint32_t)src[i+2] << 16) | ((uint32_t)src[i+3] << 24);
+        nv_pramin_wr32(&io, &win, phys + i, w);
+    }
+    if (i < len) {   /* хвост короче слова — дочитываем слово и правим байты */
+        uint32_t w = nv_pramin_rd32(&io, &win, phys + i);
+        for (uint32_t b = 0; i + b < len; b++)
+            w = (w & ~(0xffu << (8 * b))) | ((uint32_t)src[i + b] << (8 * b));
+        nv_pramin_wr32(&io, &win, phys + i, w);
+    }
+    return kIOReturnSuccess;
+}
+
+IOReturn MilcorixFB::gpuRead(uint64_t offset, void *data, uint32_t len)
+{
+    if (!data || !gpuRegionOk(offset, len)) return kIOReturnBadArgument;
+
+    nv_mmio_t io;
+    io.ctx = (void *)fBar0; io.rd = mfb_rd; io.wr = mfb_wr;
+    io.udelay = mfb_udelay; io.log = mfb_log;
+    uint64_t win = ~0ull;
+
+    uint8_t *dst = (uint8_t *)data;
+    uint64_t phys = fGpu.scratch_phys + offset;
+    uint32_t i = 0;
+    for (; i + 4 <= len; i += 4) {
+        uint32_t w = nv_pramin_rd32(&io, &win, phys + i);
+        dst[i]   = (uint8_t)w;         dst[i+1] = (uint8_t)(w >> 8);
+        dst[i+2] = (uint8_t)(w >> 16); dst[i+3] = (uint8_t)(w >> 24);
+    }
+    if (i < len) {
+        uint32_t w = nv_pramin_rd32(&io, &win, phys + i);
+        for (uint32_t b = 0; i + b < len; b++) dst[i + b] = (uint8_t)(w >> (8 * b));
+    }
+    return kIOReturnSuccess;
+}
+
+IOReturn MilcorixFB::gpuCopy(uint64_t srcOffset, uint64_t dstOffset, uint32_t bytes,
+                             uint64_t *outNanos)
+{
+    if (outNanos) *outNanos = 0;
+    if (!gpuRegionOk(srcOffset, bytes) || !gpuRegionOk(dstOffset, bytes))
+        return kIOReturnBadArgument;
+    /* Перекрытие движок отработает как попало — запрещаем явно. */
+    if ((srcOffset < dstOffset + bytes) && (dstOffset < srcOffset + bytes))
+        return kIOReturnBadArgument;
+
+    nv_mmio_t io;
+    io.ctx = (void *)fBar0; io.rd = mfb_rd; io.wr = mfb_wr;
+    io.udelay = mfb_udelay; io.log = mfb_log;
+    uint64_t win = ~0ull;
+
+    uint64_t t0 = 0, t1 = 0;
+    clock_get_uptime(&t0);
+    int rc = nv_gsp_gpu_copy(&io, &win, &fGpu,
+                             fGpu.scratch_va + srcOffset,
+                             fGpu.scratch_va + dstOffset,
+                             bytes, 2000);
+    clock_get_uptime(&t1);
+
+    if (outNanos) {
+        uint64_t ns = 0;
+        absolutetime_to_nanoseconds(t1 - t0, &ns);
+        *outNanos = ns;
+    }
+    return (rc == 0) ? kIOReturnSuccess : kIOReturnIOError;
+}
+
+/*
+ * newUserClient — выдать соединение слоя 6. Перехватываем ТОЛЬКО свой тип,
+ * всё остальное уходит базовому классу: типы соединений IOFramebuffer занимает
+ * WindowServer, и вмешиваться в них означало бы сломать рабочий стол.
+ */
+IOReturn MilcorixFB::newUserClient(task_t owningTask, void *securityID, UInt32 type,
+                                   OSDictionary *properties, IOUserClient **handler)
+{
+    if (type != MILCORIX_CONNECT_TYPE)
+        return super::newUserClient(owningTask, securityID, type, properties, handler);
+
+    if (!handler) return kIOReturnBadArgument;
+    MilcorixUserClient *uc = OSTypeAlloc(MilcorixUserClient);
+    if (!uc) return kIOReturnNoMemory;
+
+    if (!uc->initWithTask(owningTask, securityID, type, properties) || !uc->attach(this)) {
+        uc->release();
+        return kIOReturnInternalError;
+    }
+    if (!uc->start(this)) {
+        uc->detach(this);
+        uc->release();
+        return kIOReturnInternalError;
+    }
+    *handler = uc;
     return kIOReturnSuccess;
 }
