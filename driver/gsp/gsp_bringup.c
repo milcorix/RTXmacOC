@@ -762,6 +762,41 @@ int nv_gsp_bringup(const nv_mmio_t *io, nv_dma_arena_t *ar,
                                                hchan, l4_hce, token,
                                                (unsigned long long)(gpu->scratch_size >> 10),
                                                (unsigned long long)gpu->scratch_va);
+
+                                        /* --- СЛОЙ 6: заставить GPU выполнить НАШУ работу ---
+                                           Проход C доказал, что канал исполняет команду host'а
+                                           (релиз семафора). Здесь проверяется следующее и куда
+                                           более содержательное: движок копирования реально
+                                           перемещает данные по нашему указанию. Проверка идёт
+                                           целиком внутри области контекста и вывода не касается,
+                                           поэтому безопасна на любой платформе. */
+                                        if (gpu->ok && gpu->scratch_size >= 0x20000ull) {
+                                            const uint32_t tb = 0x10000u;   /* 64 КиБ */
+                                            uint64_t sp = gpu->scratch_phys, dp = sp + tb;
+                                            uint64_t sv = gpu->scratch_va,   dv = sv + tb;
+                                            for (uint32_t o = 0; o < tb; o += 4) {
+                                                nv_pramin_wr32(io, &win, sp + o, o ^ 0x4D494C43u);
+                                                nv_pramin_wr32(io, &win, dp + o, 0u);
+                                            }
+                                            int crc6 = nv_gsp_gpu_copy(io, &win, gpu, sv, dv, tb, 2000);
+                                            uint32_t bad6 = 0, firstoff = 0, firstval = 0;
+                                            if (crc6 == 0) {
+                                                for (uint32_t o = 0; o < tb; o += 4) {
+                                                    uint32_t g = nv_pramin_rd32(io, &win, dp + o);
+                                                    if (g != (o ^ 0x4D494C43u)) {
+                                                        if (!bad6) { firstoff = o; firstval = g; }
+                                                        bad6++;
+                                                    }
+                                                }
+                                            }
+                                            gpu->selftest_ok = (crc6 == 0 && bad6 == 0) ? 1 : 0;
+                                            if (gpu->selftest_ok)
+                                                nv_log(io, "*** СЛОЙ 6: GPU ВЫПОЛНИЛ НАШУ КОМАНДУ — копия %u КиБ движком CE сошлась побайтно ***\n",
+                                                       tb >> 10);
+                                            else
+                                                nv_log(io, "СЛОЙ 6: копия НЕ прошла (rc=%d, расхождений %u, первое @0x%x=0x%08x)\n",
+                                                       crc6, bad6, firstoff, firstval);
+                                        }
                                     }
                                 }
                             }
@@ -1346,6 +1381,8 @@ int nv_gsp_bringup(const nv_mmio_t *io, nv_dma_arena_t *ar,
             nv_log(io, "*** СЛОЙ 4 (проход B): объект copy-engine (AMPERE_DMA_COPY_B) на канале — OK ***\n");
         if (l4_exec_ok)
             nv_log(io, "*** СЛОЙ 4 (проход C): pushbuffer исполнен — host-семафор released ПЕРВАЯ КОМАНДА GPU ***\n");
+        if (gpu && gpu->selftest_ok)
+            nv_log(io, "*** СЛОЙ 6: движок копирования перенёс данные по нашей команде — вычислительный путь ЖИВ ***\n");
         if (l4_sched_ok)
             nv_log(io, "*** СЛОЙ 4 (проход A): канал GPFIFO создан+bind+schedule (CE0) — ПЕРВЫЙ КАНАЛ НА ЖЕЛЕЗЕ ***\n");
         else if (l4_chan_ok)

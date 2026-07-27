@@ -465,57 +465,20 @@ bool MilcorixFB::gspBringUp(void)
  */
 void MilcorixFB::runGpuSelfTest(void)
 {
+    /* Саму проверку выполняет переносимое ядро сразу после выдачи контекста —
+       там же, где она доступна и Linux-стенду. Здесь только докладываем итог,
+       чтобы он попал в NVRAM и был виден из Linux без загрузки macOS. */
     if (!fGpu.ok) {
-        mfb_log(nullptr, "MilcorixFB: GPU-самопроверка пропущена — контекст исполнения не поднят\n");
+        mfb_log(nullptr, "MilcorixFB: GPU-контекст не поднят — вычислительный путь недоступен\n");
+        mfb_klog_status("gpu:no-ctx");
         return;
     }
-
-    const uint32_t kBytes = 0x10000;          /* 64 КиБ */
-    if (fGpu.scratch_size < (uint64_t)kBytes * 2ull) {
-        mfb_log(nullptr, "MilcorixFB: под самопроверку мало места (%llu КиБ)\n",
-                (unsigned long long)(fGpu.scratch_size >> 10));
-        return;
-    }
-
-    nv_mmio_t io;
-    io.ctx = (void *)fBar0; io.rd = mfb_rd; io.wr = mfb_wr;
-    io.udelay = mfb_udelay; io.log = mfb_log;
-    uint64_t win = ~0ull;
-
-    uint64_t srcVa   = fGpu.scratch_va,   srcPhys = fGpu.scratch_phys;
-    uint64_t dstVa   = srcVa   + kBytes,  dstPhys = srcPhys + kBytes;
-
-    /* Узор, который невозможно спутать с мусором: индекс слова XOR метка. */
-    for (uint32_t i = 0; i < kBytes; i += 4) {
-        nv_pramin_wr32(&io, &win, srcPhys + i, (i ^ 0x4D494C43u));
-        nv_pramin_wr32(&io, &win, dstPhys + i, 0u);
-    }
-
-    int rc = nv_gsp_gpu_copy(&io, &win, &fGpu, srcVa, dstVa, kBytes, 2000);
-    if (rc != 0) {
-        mfb_log(nullptr, "MilcorixFB: GPU-копия НЕ выполнена (rc=%d)\n", rc);
-        mfb_klog_status("gpu:copy-fail");
-        return;
-    }
-
-    /* Сверяем весь блок, а не пару слов: частичная копия — тоже провал. */
-    uint32_t bad = 0, firstBadOff = 0, firstBadVal = 0;
-    for (uint32_t i = 0; i < kBytes; i += 4) {
-        uint32_t got = nv_pramin_rd32(&io, &win, dstPhys + i);
-        if (got != (i ^ 0x4D494C43u)) {
-            if (!bad) { firstBadOff = i; firstBadVal = got; }
-            bad++;
-        }
-    }
-
-    if (!bad) {
-        mfb_log(nullptr, "*** СЛОЙ 6: GPU ИСПОЛНИЛ НАШУ КОМАНДУ ПОД macOS — "
-                         "копия %u КиБ движком CE сошлась побайтно ***\n", kBytes >> 10);
+    if (fGpu.selftest_ok) {
+        mfb_log(nullptr, "*** СЛОЙ 6 на macOS: видеокарта выполнила нашу команду ***\n");
         mfb_klog_status("gpu:copy-ok");
     } else {
-        mfb_log(nullptr, "MilcorixFB: копия расходится в %u словах, первое @0x%x = 0x%08x\n",
-                bad, firstBadOff, firstBadVal);
-        mfb_klog_status("gpu:copy-mismatch");
+        mfb_log(nullptr, "MilcorixFB: копия движком CE не прошла — см. журнал выше\n");
+        mfb_klog_status("gpu:copy-fail");
     }
 }
 

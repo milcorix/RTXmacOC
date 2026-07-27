@@ -82,6 +82,7 @@ typedef struct {
     uint32_t gp_put;          /* следующий слот кольца GPFIFO */
     uint32_t seq;             /* счётчик payload'ов семафора — растёт с каждой отправкой */
     int      object_bound;    /* SET_OBJECT уже отправлен на этот канал */
+    int      selftest_ok;     /* 1 — GPU реально выполнил нашу копию и она сошлась */
 } nv_gsp_gpu_ctx_t;
 
 /*
