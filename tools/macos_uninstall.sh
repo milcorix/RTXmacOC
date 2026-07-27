@@ -30,8 +30,9 @@ echo ""
 echo "=== очистка staging и пересборка коллекции kext'ов ==="
 # clear-staging выкидывает kext из AuxKC — именно это делает его «незагружаемым
 # на следующем boot'е». Без этого бандл удалён, а копия в AuxKC осталась бы.
-kmutil clear-staging 2>&1 | tail -3
-kmutil install --update-all --volume-root / 2>&1 | tail -5
+RC_STAGING=0; RC_INSTALL=0
+kmutil clear-staging 2>&1 | tail -3 || RC_STAGING=$?
+kmutil install --update-all --volume-root / 2>&1 | tail -5 || RC_INSTALL=$?
 
 if [ "$KEEP_FW" -eq 0 ]; then
     echo ""
@@ -41,6 +42,16 @@ if [ "$KEEP_FW" -eq 0 ]; then
 fi
 
 echo ""
+if [ "$RC_STAGING" -ne 0 ] || [ "$RC_INSTALL" -ne 0 ]; then
+    echo "############################################################"
+    echo "#  ВНИМАНИЕ: kmutil вернул ошибку (staging=$RC_STAGING install=$RC_INSTALL)."
+    echo "#  Kext мог остаться в загрузочной коллекции. Проверь вывод"
+    echo "#  выше и при необходимости повтори; аварийный путь —"
+    echo "#  boot-arg milcorix=0 из Linux (tools/milcorix_stage.py 0)."
+    echo "############################################################"
+    exit 1
+fi
+
 echo "############################################################"
 echo "#  MilcorixFB удалён. Перезагрузись — экран пойдёт через    #"
 echo "#  штатный EFI-фреймбуфер.                                  #"

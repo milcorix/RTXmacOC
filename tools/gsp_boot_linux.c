@@ -167,11 +167,20 @@ int main(int argc, char **argv)
 
     /* Linux-стенд — диагностический прогон: dbg!=NULL включает дампы и длинные
        паузы «разглядеть монитор». scan не нужен (стенд не публикует апертуру),
-       провайдер FB не нужен (FB берётся во VRAM и заливается через PRAMIN). */
-    int rc=nv_gsp_bringup(&io,&ar,&pci,&dbg,NULL,NULL,NULL);
+       провайдер FB не нужен (FB берётся во VRAM и заливается через PRAMIN).
+       А вот контекст исполнения нужен обязательно: без него ядро не выполнит
+       самопроверку слоя 6, и вычислительный путь на железе останется
+       непроверенным — притом что стенд для этого и существует. */
+    nv_gsp_gpu_ctx_t gpu;
+    memset(&gpu, 0, sizeof(gpu));
+    int rc=nv_gsp_bringup(&io,&ar,&pci,&dbg,NULL,NULL,&gpu);
 
     struct vfio_iommu_type1_dma_unmap u={.argsz=sizeof(u),.iova=ARENA_IOVA,.size=ARENA_SIZE};
     ioctl(v.container,VFIO_IOMMU_UNMAP_DMA,&u); munmap(abuf,ARENA_SIZE); vfio_close(&v);
     printf("\n=== РЕЗУЛЬТАТ: %s ===\n", rc==0?"OK (GSP-RM загружен, RISC-V active)":"FAIL (см. лог)");
+    printf("=== СЛОЙ 6: %s ===\n",
+           gpu.ok ? (gpu.selftest_ok ? "GPU выполнил нашу команду (копия CE сошлась)"
+                                     : "канал жив, но копия НЕ прошла")
+                  : "контекст исполнения не поднят");
     return rc==0?0:1;
 }

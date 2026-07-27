@@ -23,7 +23,9 @@
 #define KLOG_PATH   KLOG_DIR "/lastboot.log"
 #define KLOG_SIZE   (512u * 1024u)     /* трейс bring-up'а помещается с запасом */
 #define KLOG_LINE   1024u              /* потолок одной строки */
-#define KLOG_TRIES  24                 /* попыток отложенного сброса за загрузку */
+/* Попыток отложенного сброса за загрузку. Считаются только те, что реально шли
+   на диск: если журнал не рос с прошлого раза, попытка не тратится. */
+#define KLOG_TRIES  64
 
 /* Apple vendor GUID — тот же namespace, где живут boot-args. Имя в этом виде
    AppleEFINVRAM кладёт в efivarfs как <GUID>-milcorix-status. */
@@ -38,6 +40,11 @@ static IOLock  *gLock     = nullptr;
    IODeviceTree:/options может быть ещё не поднят — тогда пробуем позже. */
 static char     gStatus[160];
 static bool     gStatusWritten = false;
+/* Сколько байт журнала уже лежит в файле. Сбрасывать нужно ПОВТОРНО по мере
+   роста: решающие строки (трассировка обращений WindowServer, итог modeset'а)
+   появляются ПОСЛЕ первого удачного сброса, и остановка на нём выкинула бы из
+   файла ровно то, ради чего он заводился. */
+static uint32_t gFlushedLen = 0;
 
 void mfb_klog_init(void)
 {
@@ -51,6 +58,7 @@ void mfb_klog_free(void)
 {
     if (gBuf) { IOFree(gBuf, KLOG_SIZE); gBuf = nullptr; gLen = 0; }
     if (gLock) { IOLockFree(gLock); gLock = nullptr; }
+    gFlushedLen = 0; gOverflow = false;
 }
 
 void mfb_klog_vprintf(const char *fmt, va_list ap)
@@ -126,6 +134,7 @@ int mfb_klog_flush(void)
 
     vnode_close(vp, FWRITE, ctx);
     vfs_context_rele(ctx);
+    if (rc == 0) gFlushedLen = len;
     return rc;
 }
 
@@ -149,9 +158,13 @@ void mfb_klog_flush_lazy(void)
 {
     if (!gStatusWritten && klog_status_commit()) gStatusWritten = true;
     if (gTriesLeft <= 0) return;
+
+    /* Нечего досылать — не трогаем ФС. */
+    if (gBuf && gLen == gFlushedLen && gFlushedLen != 0) return;
+
     gTriesLeft--;
     if (mfb_klog_flush() == 0)
-        gTriesLeft = 0;                  /* записали — больше не дёргаем ФС */
+        gFlushedLen = gLen;              /* записали ровно столько */
 }
 
 void mfb_klog_status(const char *line)

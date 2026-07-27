@@ -181,7 +181,7 @@ jobs:
             o="build/core_$(basename "$f" .c).o"
             clang -c "$f" -arch x86_64 -isysroot "$SDK" \
               -I"$SDK/System/Library/Frameworks/Kernel.framework/Headers" \
-              -ffreestanding -fno-builtin -fno-common \
+              -Os -ffreestanding -fno-builtin -fno-common \
               -DKERNEL -DKERNEL_PRIVATE -DAPPLE -std=gnu11 -o "$o"
             CORE_OBJ="$CORE_OBJ $o"
           done
@@ -196,6 +196,24 @@ jobs:
             echo "FAIL: остались неопределённые nv_* символы (обвязка неполна)"; exit 1
           fi
           echo "OK: kext линкуется, все nv_* символы разрешены (стены 1-3 замкнуты)"
+
+      - name: Check kernel stack frames (стек ядра macOS — 16 КиБ)
+        run: |
+          mkdir -p build
+          SDK="$(xcrun --sdk macosx --show-sdk-path)"
+          # Слишком большой кадр в ядре — это паника на железе, а не предупреждение.
+          # Порог 4 КиБ: поверх нашего кадра ещё лежит цепочка IOService::start
+          # и чтение прошивки через VFS.
+          FAIL=0
+          for f in driver/gsp/*.c; do
+            OUT=$(clang -c "$f" -arch x86_64 -isysroot "$SDK" \
+              -I"$SDK/System/Library/Frameworks/Kernel.framework/Headers" \
+              -Os -ffreestanding -fno-builtin -fno-common \
+              -DKERNEL -DKERNEL_PRIVATE -DAPPLE -std=gnu11 \
+              -Wframe-larger-than=4096 -o /dev/null 2>&1 | grep -i "frame size" || true)
+            if [ -n "$OUT" ]; then echo "СЛИШКОМ БОЛЬШОЙ КАДР: $f"; echo "$OUT"; FAIL=1; fi
+          done
+          [ "$FAIL" -eq 0 ] && echo "OK: все кадры ядра в пределах 4 КиБ" || exit 1
 
       - name: Build portable GSP core as kernel C (compile-check, layers 2-5)
         run: |
@@ -223,7 +241,8 @@ jobs:
               FAIL=1
             fi
           done
-          [ "$FAIL" -eq 0 ] && echo "ВЕСЬ CORE kernel-C компилируется" || echo "часть core не переносится (см. выше)"
+          if [ "$FAIL" -eq 0 ]; then echo "ВЕСЬ CORE kernel-C компилируется"
+          else echo "часть core не переносится (см. выше)"; exit 1; fi
 
       - name: Build loadable MilcorixFB.kext bundle (ld -kext + bundle)
         run: |

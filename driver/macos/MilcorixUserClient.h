@@ -52,14 +52,20 @@ public:
                                   OSDictionary *properties) override;
     virtual bool     start(IOService *provider) override;
     virtual void     stop(IOService *provider) override;
+    virtual void     free(void) override;
     virtual IOReturn clientClose(void) override;
     virtual IOReturn externalMethod(uint32_t selector, IOExternalMethodArguments *args,
                                     IOExternalMethodDispatch *dispatch, OSObject *target,
                                     void *reference) override;
 
 private:
+    /* Ссылка на владельца УДЕРЖИВАЕТСЯ (retain) на всё время жизни клиента.
+       Иначе stop() у провайдера обнулял бы указатель под уже выполняющимся
+       внешним методом: проверка и разыменование разнесены во времени, а метод
+       идёт на потоке вызывающего. Классический use-after-free. */
     MilcorixFB *fOwner;
     task_t      fTask;
+    bool        fCounted;   /* мы заняли слот клиента слоя 6 */
 
     IOReturn methodGetInfo(IOExternalMethodArguments *args);
     IOReturn methodWrite(IOExternalMethodArguments *args);

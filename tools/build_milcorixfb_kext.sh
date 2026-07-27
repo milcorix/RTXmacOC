@@ -31,7 +31,9 @@ ARCH="x86_64"
 mkdir -p "$OUTDIR"
 
 # --- 1. C++-обвязка kext (IOFramebuffer subclass + firmware-шим) --------------
-CXXFLAGS=(-arch "$ARCH" -isysroot "$SDK" -I"$KHDR" -I"$KPHDR"
+# -Os обязателен: без оптимизации кадр nv_gsp_bringup достигает 7.5 КиБ при
+# 16-КиБ стеке ядра, а поверх него идёт чтение 36-МиБ блоба через VFS.
+CXXFLAGS=(-arch "$ARCH" -isysroot "$SDK" -I"$KHDR" -I"$KPHDR" -Os
           -fapple-kext -fno-builtin -fno-exceptions -fno-rtti -fno-common
           -DKERNEL -DKERNEL_PRIVATE -DDRIVER_PRIVATE -DAPPLE -DNeXT -std=gnu++17)
 clang++ -x c++ -c driver/macos/MilcorixFB.cpp   "${CXXFLAGS[@]}" -o "$OUTDIR/MilcorixFB.o"
@@ -40,7 +42,7 @@ clang++ -x c++ -c driver/macos/mfb_klog.cpp      "${CXXFLAGS[@]}" -o "$OUTDIR/mf
 clang++ -x c++ -c driver/macos/MilcorixUserClient.cpp "${CXXFLAGS[@]}" -o "$OUTDIR/MilcorixUserClient.o"
 
 # --- 2. Переносимое ядро GSP как kernel-C -------------------------------------
-CFLAGS=(-arch "$ARCH" -isysroot "$SDK" -I"$KHDR"
+CFLAGS=(-arch "$ARCH" -isysroot "$SDK" -I"$KHDR" -Os
         -ffreestanding -fno-builtin -fno-common
         -DKERNEL -DKERNEL_PRIVATE -DAPPLE -std=gnu11)
 CORE_OBJ=()

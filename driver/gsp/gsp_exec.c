@@ -53,16 +53,26 @@ int nv_gsp_gpu_copy(const nv_mmio_t *io, uint64_t *win_base, nv_gsp_gpu_ctx_t *g
     nv_pramin_wr32(io, win_base, gpu->userd_phys + NV_USERD_GP_PUT_OFF, gpu->gp_put);
     io->wr(io->ctx, NV_VFN_DOORBELL_ADDR, (gpu->runlist << 16) | gpu->chid);
 
-    /* Ожидание завершения — строго по семафору. */
-    uint32_t ms = timeout_ms ? timeout_ms : 2000u;
-    for (uint32_t i = 0; i < ms; i++) {
+    /* Ожидание завершения — строго по семафору. Шаг опроса мелкий: копия
+       занимает единицы микросекунд, и шаг в миллисекунду не только тратил бы
+       время впустую, но и делал бы измеренную длительность бессмысленной —
+       наружу уходила бы цифра, заниженная на два порядка. */
+    uint32_t ticks = (timeout_ms ? timeout_ms : 2000u) * 50u;   /* по 20 мкс */
+    for (uint32_t i = 0; i < ticks; i++) {
         if (nv_pramin_rd32(io, win_base, gpu->sem_phys) == payload) {
             if (set_obj) gpu->object_bound = 1;
             return 0;
         }
-        io->udelay(io->ctx, 1000);
+        io->udelay(io->ctx, 20);
     }
-    nv_log(io, "GPU-копия: таймаут (%u мс), семафор=0x%08x ждали 0x%08x\n",
-           ms, nv_pramin_rd32(io, win_base, gpu->sem_phys), payload);
+    nv_log(io, "GPU-копия: таймаут (%u мс), семафор=0x%08x ждали 0x%08x — "
+               "канал считается потерянным до следующего bring-up'а\n",
+           timeout_ms ? timeout_ms : 2000u,
+           nv_pramin_rd32(io, win_base, gpu->sem_phys), payload);
+    /* Состояние канала после таймаута неизвестно: GP_PUT сдвинут, запись кольца
+       осталась. Продолжать слать в него — значит копить неисполненные записи и
+       молча упереться в переполнение кольца. Помечаем контекст негодным, чтобы
+       наружу шло честное «не готов», а не «просто ещё один таймаут». */
+    gpu->ok = 0;
     return -1;
 }

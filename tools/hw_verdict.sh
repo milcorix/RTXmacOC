@@ -30,11 +30,13 @@ echo "лог: $LOG ($(wc -l < "$LOG") строк, $(date -r "$LOG" '+%F %T'))"
 echo ""
 
 echo "Слои:"
-verdict "2  GSP в RISC-V стартовал"                 "GSP reset(RISC-V) OK"
+# Строка формируется как "GSP RISC-V: active=%d", поэтому дословного признака в
+# исходнике нет — сверяем по факту вывода: active=1 в логе означает живое ядро.
+verdict "2  GSP RISC-V активен"                     "RISC-V: active=1"
 verdict "2  GSP-RM ответил по RPC (INIT_DONE)"      "GSP_INIT_DONE"
 verdict "3  двусторонний RPC + RM-цепочка"          "СЛОЙ 3 (проход A)"
 verdict "3  прямой GMMU (page-tables во VRAM)"      "СЛОЙ 3 (проход D)"
-verdict "4  канал GPFIFO создан и запланирован"     "СЛОЙ 4 (проход A)"
+verdict "4  канал GPFIFO создан и запланирован"     "ПЕРВЫЙ КАНАЛ НА ЖЕЛЕЗЕ"
 verdict "4  первая команда GPU исполнена"           "ПЕРВАЯ КОМАНДА GPU"
 verdict "5  дисплеи перечислены"                    "СЛОЙ 5 (A0)"
 verdict "5  modeset проглочен"                      "СЛОЙ 5 (C.4d)"
@@ -61,12 +63,15 @@ if has "таблица прерываний получена"; then
     line "таблица прерываний получена"
     grep -- "intr\[" "$LOG" | head -6 | sed 's/^/    /'
 else
-    grep -m1 -- "INTR_GET_KERNEL_TABLE" "$LOG" | sed 's/^/    /' || echo "    (нет данных)"
+    if grep -q -- "INTR_GET_KERNEL_TABLE" "$LOG"; then
+        grep -m1 -- "INTR_GET_KERNEL_TABLE" "$LOG" | sed 's/^/    /'
+    else echo "    (нет данных)"; fi
 fi
 echo ""
 
 echo "Движки карты (есть ли NVDEC/NVENC для аппаратного видео):"
-grep -- "engn\[" "$LOG" | sed 's/^/    /' || echo "    (таблица движков не прочитана)"
+if grep -q -- "engn\[" "$LOG"; then grep -- "engn\[" "$LOG" | sed 's/^/    /'
+else echo "    (таблица движков не прочитана)"; fi
 echo ""
 
 if has "СЛОЙ 6: копия НЕ прошла"; then

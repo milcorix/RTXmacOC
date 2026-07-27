@@ -435,7 +435,9 @@ int nv_gsp_bringup(const nv_mmio_t *io, nv_dma_arena_t *ar,
                программируем, только спрашиваем: это дёшево и снимает главные
                неизвестные вычислительного направления за один прогон. */
             {
-                nv_gsp_gr_ctxbufs cb; uint32_t cbst = 0xffffffffu;
+                /* static: структура на 204 байта, а стек ядра macOS всего 16 КиБ —
+                   и поверх этого кадра идёт чтение 36-МиБ блоба через VFS. */
+                static nv_gsp_gr_ctxbufs cb; uint32_t cbst = 0xffffffffu;
                 int cbrc = nv_gsp_gr_get_ctxbuf_info(&ch, si.h_client, si.h_subdevice,
                                                      0, &cb, &cbst);
                 if (cbrc == NV_GSP_RM_OK && cbst == 0) {
@@ -450,7 +452,8 @@ int nv_gsp_bringup(const nv_mmio_t *io, nv_dma_arena_t *ar,
                            cbrc, cbst);
                 }
 
-                nv_gsp_intr_table it; uint32_t itst = 0xffffffffu;
+                /* static: 2052 байта — самая крупная локальная структура функции. */
+                static nv_gsp_intr_table it; uint32_t itst = 0xffffffffu;
                 int itrc = nv_gsp_intr_get_table(&ch, si.h_client, si.h_subdevice, &it, &itst);
                 if (itrc == NV_GSP_RM_OK && itst == 0) {
                     nv_log(io, "*** СЛОЙ 6: таблица прерываний получена — записей %u (нужна для recovery) ***\n",
@@ -489,7 +492,7 @@ int nv_gsp_bringup(const nv_mmio_t *io, nv_dma_arena_t *ar,
                Читаем список движков GPU, берём engineType CE0 для канала (A2).
                Порт r535_fifo_runl_ctor. */
             {
-                nv_gsp_fifo_devinfo di;
+                static nv_gsp_fifo_devinfo di;   /* 516 байт — тоже уводим со стека */
                 uint32_t dst = 0xffffffffu;
                 int drc = nv_gsp_fifo_get_device_info(&ch, hcli, hsub, &di, &dst);
                 if (drc == NV_GSP_RM_OK && dst == 0) {

@@ -73,13 +73,19 @@ int main(int argc, char **argv)
 
     /* --- 1. Что за карта и сколько памяти нам дали --- */
     MilcorixGpuInfo info;
+    memset(&info, 0, sizeof(info));   /* иначе при коротком ответе читаем мусор */
     size_t infoSize = sizeof(info);
     kern_return_t kr = IOConnectCallStructMethod(conn, kMilcorixMethodGetInfo,
                                                  NULL, 0, &info, &infoSize);
     if (kr != KERN_SUCCESS) { fprintf(stderr, "GetInfo: 0x%x\n", kr); return 1; }
+    if (infoSize < sizeof(info)) {
+        fprintf(stderr, "GetInfo вернул %zu байт вместо %zu — версии драйвера и "
+                        "утилиты разошлись\n", infoSize, sizeof(info));
+        return 1;
+    }
 
-    printf("GPU-контекст: %s, память под данные %llu КиБ\n",
-           info.ready ? "готов" : "НЕ готов",
+    printf("GPU-контекст: %s, канал=0x%08x CE=0x%08x, память под данные %llu КиБ\n",
+           info.ready ? "готов" : "НЕ готов", info.channel, info.copy_engine,
            (unsigned long long)(info.scratch_size >> 10));
     if (!info.ready) {
         fprintf(stderr, "канал не поднят — смотри журнал драйвера\n");

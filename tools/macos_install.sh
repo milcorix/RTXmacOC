@@ -32,11 +32,13 @@ tools/build_milcorixfb_kext.sh build
 
 echo ""
 echo "=== 2/4 прошивки GSP ==="
-if [ -d "$FW_DST" ] && [ -n "$(ls -A "$FW_DST" 2>/dev/null)" ]; then
+if [ -n "$FW_SRC" ]; then
+    # Явно указанный каталог имеет приоритет: пользователь передал его именно
+    # затем, чтобы обновить прошивки, а не чтобы услышать «уже разложены».
+    tools/install_milcorix_fw.sh "$FW_SRC"
+elif [ -d "$FW_DST" ] && [ -n "$(ls -A "$FW_DST" 2>/dev/null)" ]; then
     echo "уже разложены в $FW_DST:"
     ls -la "$FW_DST"
-elif [ -n "$FW_SRC" ]; then
-    tools/install_milcorix_fw.sh "$FW_SRC"
 else
     echo "!! прошивок нет и каталог-источник не указан."
     echo "   Нужны три файла (linux-firmware 535.113.01):"

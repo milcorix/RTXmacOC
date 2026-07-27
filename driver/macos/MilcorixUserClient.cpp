@@ -31,16 +31,30 @@ bool MilcorixUserClient::initWithTask(task_t owningTask, void *securityToken, UI
 {
     if (type != MILCORIX_CONNECT_TYPE) return false;
     if (!super::initWithTask(owningTask, securityToken, type, properties)) return false;
-    fTask  = owningTask;
-    fOwner = nullptr;
+    fTask    = owningTask;
+    fOwner   = nullptr;
+    fCounted = false;
     return true;
 }
 
 bool MilcorixUserClient::start(IOService *provider)
 {
-    fOwner = OSDynamicCast(MilcorixFB, provider);
-    if (!fOwner) return false;
+    MilcorixFB *owner = OSDynamicCast(MilcorixFB, provider);
+    if (!owner) return false;
     if (!super::start(provider)) return false;
+
+    /* Канал один: пушбуфер, кольцо и семафор общие. Второму клиенту честно
+       отказываем, вместо того чтобы молча перемешивать команды. */
+    if (!owner->gpuClientOpen()) {
+        IOLog("MilcorixUC: отказ — канал слоя 6 уже занят другим клиентом\n");
+        return false;
+    }
+    fCounted = true;
+
+    /* Держим владельца сами: провайдер может уйти, пока наш метод исполняется. */
+    owner->retain();
+    fOwner = owner;
+
     IOLog("MilcorixUC: клиент подключён (GPU %s)\n",
           fOwner->gpuReady() ? "готов" : "не готов");
     return true;
@@ -48,8 +62,20 @@ bool MilcorixUserClient::start(IOService *provider)
 
 void MilcorixUserClient::stop(IOService *provider)
 {
-    fOwner = nullptr;
+    /* Указатель здесь НЕ обнуляем: внешний метод может исполняться прямо
+       сейчас на другом потоке. Освобождение — во free(), когда IOKit уже
+       гарантировал, что ссылок на объект не осталось. */
     super::stop(provider);
+}
+
+void MilcorixUserClient::free(void)
+{
+    if (fOwner) {
+        if (fCounted) { fOwner->gpuClientClose(); fCounted = false; }
+        fOwner->release();
+        fOwner = nullptr;
+    }
+    super::free();
 }
 
 IOReturn MilcorixUserClient::clientClose(void)
@@ -66,6 +92,8 @@ IOReturn MilcorixUserClient::methodGetInfo(IOExternalMethodArguments *args)
     MilcorixGpuInfo info;
     bzero(&info, sizeof(info));
     info.ready        = fOwner->gpuReady() ? 1u : 0u;
+    info.channel      = fOwner->gpuChannel();
+    info.copy_engine  = fOwner->gpuCopyEngine();
     info.scratch_size = fOwner->gpuScratchSize();
 
     memcpy(args->structureOutput, &info, sizeof(info));

@@ -53,3 +53,5 @@ Tahoe_NVIDIA_Root_Patch/
 # транзитные артефакты, не исходники. Содержимое, которое имело ценность,
 # перенесено в docs/macos-runbook.md.
 b99c30bf-*
+tools/gsp_gr_test
+__pycache__/

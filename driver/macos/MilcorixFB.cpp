@@ -302,6 +302,9 @@ int MilcorixFB::allocScanoutFb(uint32_t w, uint32_t h, uint32_t pitch,
             fApertureCpuPhys = fBar1Phys + kVramOff;
             fApertureLen     = bytes;
 
+            /* Дальше core безусловно строит ctx-dma и флипает окно на этот
+               адрес, поэтому с этого момента буфер считается живым. */
+            fScanoutLive = true;
             *outGpuAddr = kVramOff;
             *outTarget  = NV_CTXDMA_TARGET_VRAM;
             if (outCpuVa) *outCpuVa = (void *)((volatile uint8_t *)fBar1 + kVramOff);
@@ -353,6 +356,7 @@ int MilcorixFB::allocScanoutFb(uint32_t w, uint32_t h, uint32_t pitch,
     mfb_log(nullptr, "MilcorixFB: scanout-FB в СИСТЕМНОЙ памяти VA=%p phys=0x%llx %ux%u pitch=%u (%llu КиБ)\n",
             va, (unsigned long long)phys, w, h, pitch, (unsigned long long)(bytes >> 10));
 
+    fScanoutLive = true;
     *outGpuAddr = (uint64_t)phys;
     *outTarget  = NV_CTXDMA_TARGET_SYSMEM;
     if (outCpuVa) *outCpuVa = va;
@@ -362,9 +366,19 @@ int MilcorixFB::allocScanoutFb(uint32_t w, uint32_t h, uint32_t pitch,
 void MilcorixFB::freeScanoutFb(void)
 {
     if (fFbBuf) {
-        fFbBuf->complete();
-        fFbBuf->release();
-        fFbBuf = nullptr;
+        if (fScanoutLive) {
+            /* Окно дисплея уже указывает на эти страницы. Вернуть их ядру —
+               значит отдать под чужие нужды память, которую движок продолжает
+               читать: на экране появится содержимое посторонних данных, а
+               диагноз будет ложным («драйвер сломал вывод»). Сознательно
+               оставляем буфер за собой — как и DMA-арену при живой прошивке. */
+            mfb_log(nullptr, "MilcorixFB: scanout-буфер НЕ освобождается — дисплей "
+                             "запрограммирован на него\n");
+        } else {
+            fFbBuf->complete();
+            fFbBuf->release();
+            fFbBuf = nullptr;
+        }
     }
     fFbGpuAddr = 0; fFbTarget = 0;
     fApertureCpuPhys = 0; fApertureLen = 0;
@@ -508,6 +522,7 @@ bool MilcorixFB::start(IOService *provider)
     fFbBuf = nullptr;   fFbGpuAddr = 0;     fFbTarget = 0;
     fApertureCpuPhys = 0; fApertureLen = 0;
     fModeset = false;   fEdidOk = false;    fGspRunning = false;
+    fGpuLock = nullptr; fGpuClients = 0; fScanoutLive = false;
     bzero(&fGpu, sizeof(fGpu));
     fWidth = 1280; fHeight = 1024; fPitch = fWidth * 4u;
 
@@ -529,10 +544,12 @@ bool MilcorixFB::start(IOService *provider)
 
     fPci->setMemoryEnable(true);
     fPci->setBusMasterEnable(true);   /* GSP DMA читает арену из sysmem */
-    if (!mapBars()) { mfb_klog_status("fail:bar0"); mfb_klog_flush(); teardown(); return false; }
+    if (!mapBars()) { mfb_klog_status("fail:bar0"); mfb_klog_flush(); teardown(); mfb_klog_free(); return false; }
 
     /* --- Железо поднимаем ДО super::start(): пока мы не знаем, что получили
        годный фреймбуфер, становиться фреймбуфером системы нельзя. --- */
+    /* Замок нужен до первого обращения к операциям слоя 6. */
+    fGpuLock = IOLockAlloc();
     bool ok = gspBringUp();
 
     if (!ok) {
@@ -541,6 +558,7 @@ bool MilcorixFB::start(IOService *provider)
         mfb_klog_status("fail:bringup");
         mfb_klog_flush();
         teardown();
+        mfb_klog_free();
         return false;
     }
 
@@ -552,6 +570,7 @@ bool MilcorixFB::start(IOService *provider)
         mfb_klog_status("ok:bringup-only");
         mfb_klog_flush();
         teardown();
+        mfb_klog_free();   /* stop() на этом пути не будет — закрываем журнал сами */
         return false;
     }
 
@@ -562,6 +581,7 @@ bool MilcorixFB::start(IOService *provider)
         mfb_klog_status("fail:no-aperture");
         mfb_klog_flush();
         teardown();
+        mfb_klog_free();
         return false;
     }
 
@@ -569,6 +589,8 @@ bool MilcorixFB::start(IOService *provider)
         mfb_log(nullptr, "MilcorixFB: IOFramebuffer::start FAIL\n");
         mfb_klog_status("fail:iofb-start");
         mfb_klog_flush();
+        teardown();        /* stop() после провала start() не вызывается */
+        mfb_klog_free();
         return false;
     }
 
@@ -600,6 +622,7 @@ void MilcorixFB::teardown(void)
     if (fFbMem)   { fFbMem->release();   fFbMem = nullptr; }
     if (fBar1Map) { fBar1Map->release(); fBar1Map = nullptr; fBar1 = nullptr; }
     if (fBar0Map) { fBar0Map->release(); fBar0Map = nullptr; fBar0 = nullptr; }
+    if (fGpuLock) { IOLockFree(fGpuLock); fGpuLock = nullptr; }
 }
 
 void MilcorixFB::freeDmaArena(void)
@@ -814,7 +837,7 @@ bool MilcorixFB::gpuRegionOk(uint64_t offset, uint32_t len) const
     return true;
 }
 
-IOReturn MilcorixFB::gpuWrite(uint64_t offset, const void *data, uint32_t len)
+IOReturn MilcorixFB::gpuWriteLocked(uint64_t offset, const void *data, uint32_t len)
 {
     if (!data || !gpuRegionOk(offset, len)) return kIOReturnBadArgument;
 
@@ -840,7 +863,7 @@ IOReturn MilcorixFB::gpuWrite(uint64_t offset, const void *data, uint32_t len)
     return kIOReturnSuccess;
 }
 
-IOReturn MilcorixFB::gpuRead(uint64_t offset, void *data, uint32_t len)
+IOReturn MilcorixFB::gpuReadLocked(uint64_t offset, void *data, uint32_t len)
 {
     if (!data || !gpuRegionOk(offset, len)) return kIOReturnBadArgument;
 
@@ -868,6 +891,7 @@ IOReturn MilcorixFB::gpuCopy(uint64_t srcOffset, uint64_t dstOffset, uint32_t by
                              uint64_t *outNanos)
 {
     if (outNanos) *outNanos = 0;
+    if (!fGpuLock) return kIOReturnNotReady;
     if (!gpuRegionOk(srcOffset, bytes) || !gpuRegionOk(dstOffset, bytes))
         return kIOReturnBadArgument;
     /* Перекрытие движок отработает как попало — запрещаем явно. */
@@ -879,13 +903,17 @@ IOReturn MilcorixFB::gpuCopy(uint64_t srcOffset, uint64_t dstOffset, uint32_t by
     io.udelay = mfb_udelay; io.log = mfb_log;
     uint64_t win = ~0ull;
 
+    IOLockLock(fGpuLock);
     uint64_t t0 = 0, t1 = 0;
     clock_get_uptime(&t0);
     int rc = nv_gsp_gpu_copy(&io, &win, &fGpu,
                              fGpu.scratch_va + srcOffset,
                              fGpu.scratch_va + dstOffset,
-                             bytes, 2000);
+                             /* ожидание — спин (IODelay); 2 секунды по запросу
+                                из userspace держали бы ядро CPU впустую */
+                             bytes, 200);
     clock_get_uptime(&t1);
+    IOLockUnlock(fGpuLock);
 
     if (outNanos) {
         uint64_t ns = 0;
@@ -921,4 +949,48 @@ IOReturn MilcorixFB::newUserClient(task_t owningTask, void *securityID, UInt32 t
     }
     *handler = uc;
     return kIOReturnSuccess;
+}
+
+/* --- Сериализация доступа к железу ---
+   Все три операции трогают одно и то же: регистр окна PRAMIN, единственный
+   пушбуфер и состояние канала. Замок обязателен, иначе конкурентный вызов
+   уводит чужую запись в соседнее окно PRAMIN — а там таблицы страниц и
+   instance block. */
+IOReturn MilcorixFB::gpuWrite(uint64_t offset, const void *data, uint32_t len)
+{
+    if (!fGpuLock) return kIOReturnNotReady;
+    IOLockLock(fGpuLock);
+    IOReturn rc = gpuWriteLocked(offset, data, len);
+    IOLockUnlock(fGpuLock);
+    return rc;
+}
+
+IOReturn MilcorixFB::gpuRead(uint64_t offset, void *data, uint32_t len)
+{
+    if (!fGpuLock) return kIOReturnNotReady;
+    IOLockLock(fGpuLock);
+    IOReturn rc = gpuReadLocked(offset, data, len);
+    IOLockUnlock(fGpuLock);
+    return rc;
+}
+
+/* Одновременная работа двух клиентов с одним каналом не поддержана: пушбуфер,
+   кольцо и семафор общие. Пускаем первого, остальным отказываем явно — это
+   честнее, чем молча перемешивать их команды. */
+bool MilcorixFB::gpuClientOpen(void)
+{
+    if (!fGpuLock) return false;
+    IOLockLock(fGpuLock);
+    bool ok = (fGpuClients == 0);
+    if (ok) fGpuClients = 1;
+    IOLockUnlock(fGpuLock);
+    return ok;
+}
+
+void MilcorixFB::gpuClientClose(void)
+{
+    if (!fGpuLock) return;
+    IOLockLock(fGpuLock);
+    if (fGpuClients) fGpuClients--;
+    IOLockUnlock(fGpuLock);
 }

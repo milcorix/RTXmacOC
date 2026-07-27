@@ -37,10 +37,12 @@ def read_nvram_status():
         try:
             with open(path, 'rb') as f:
                 raw = f.read()[4:]           # 4 байта атрибутов EFI
-            txt = raw.decode('utf-16-le', 'ignore').strip('\x00')
-            if not txt.isprintable():
-                txt = raw.decode('utf-8', 'ignore').strip('\x00')
-            return txt.strip()
+            # AppleEFINVRAM хранит нашу строку как есть (ASCII), поэтому UTF-8
+            # пробуем первым: UTF-16 на ASCII-байтах даёт иероглифы, а не отказ.
+            txt = raw.decode('utf-8', 'ignore').strip('\x00').strip()
+            if not txt or not txt.isprintable():
+                txt = raw.decode('utf-16-le', 'ignore').strip('\x00').strip()
+            return txt
         except OSError as e:
             return f'(не прочитать: {e})'
     return None

@@ -142,10 +142,15 @@ public:
        BAR, эти же операции заменятся прямым маппингом. */
     bool     gpuReady(void) const { return fGpu.ok; }
     uint64_t gpuScratchSize(void) const { return fGpu.scratch_size; }
+    uint32_t gpuChannel(void) const { return fGpu.h_channel; }
+    uint32_t gpuCopyEngine(void) const { return fGpu.h_ce; }
     IOReturn gpuWrite(uint64_t offset, const void *data, uint32_t len);
     IOReturn gpuRead(uint64_t offset, void *data, uint32_t len);
     IOReturn gpuCopy(uint64_t srcOffset, uint64_t dstOffset, uint32_t bytes,
                      uint64_t *outNanos);
+    /* Учёт клиентов слоя 6: одновременный доступ к одному каналу не поддержан. */
+    bool     gpuClientOpen(void);
+    void     gpuClientClose(void);
 
     // --- колбэк провайдера FB для переносимого core (см. nv_gsp_fb_provider_t) ---
     int  allocScanoutFb(uint32_t w, uint32_t h, uint32_t pitch,
@@ -189,6 +194,20 @@ private:
        ровно тот класс бага, из-за которого всё и началось. */
     bool                  fGspRunning;
 
+    /* Замок доступа к железу для операций слоя 6. Окно PRAMIN (регистр 0x1700) —
+       ОДНА глобальная железка, а состояние канала (слот кольца, счётчик
+       семафора, привязка объекта) — общее. Внешние методы IOKit вызываются на
+       потоке вызывающего и не сериализуются, поэтому два клиента без замка
+       увели бы чужую запись в соседнее окно — а там лежат таблицы страниц и
+       instance block канала. Тихая порча без единой строки в журнале. */
+    IOLock               *fGpuLock;
+    uint32_t              fGpuClients;   /* сколько клиентов слоя 6 открыто */
+
+    /* Дисплей уже запрограммирован на scanout-буфер (ctx-dma + окно). Пока это
+       так, страницы возвращать ядру НЕЛЬЗЯ: движок продолжит их читать, и на
+       экран попадёт чужая память. Та же логика, что у fGspRunning для арены. */
+    bool                  fScanoutLive;
+
     /* Живой контекст исполнения на GPU (канал GPFIFO + движок копирования),
        оставшийся после bring-up'а. Основа для слоя 6: через него платформа
        отправляет собственную работу, не пересоздавая канал. */
@@ -204,6 +223,8 @@ private:
     bool  gspBringUp(void);       // слои 2–5 через переносимый core (nv_mmio_t)
     void  runGpuSelfTest(void);   // слой 6: реальная GPU-копия через наш же канал
     bool  gpuRegionOk(uint64_t offset, uint32_t len) const;  // границы области данных
+    IOReturn gpuWriteLocked(uint64_t offset, const void *data, uint32_t len);
+    IOReturn gpuReadLocked(uint64_t offset, void *data, uint32_t len);
     bool  modeset(uint32_t w, uint32_t h);  // GSP-modeset на режим
 };
 
