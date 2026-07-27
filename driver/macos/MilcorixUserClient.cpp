@@ -18,6 +18,14 @@ OSDefineMetaClassAndStructors(MilcorixUserClient, IOUserClient);
    гигабайтные запросы просто заняли бы ядро надолго — режем на разумном. */
 #define MILCORIX_MAX_XFER   (4u * 1024u * 1024u)
 
+/* Промежуточный буфер для потоковой передачи. IOKit кладёт небольшие структуры
+   прямо в structureInput/Output, а всё крупнее внутреннего порога отдаёт
+   ДЕСКРИПТОРОМ ПАМЯТИ, оставляя указатель нулевым. Обрабатывать только
+   указатель — значит отвергать любую практически полезную передачу: наша же
+   утилита по умолчанию шлёт 256 КиБ. Поэтому поддерживаем оба пути, а большие
+   буферы гоняем кусками, не выделяя копию целиком. */
+#define MILCORIX_STAGE_CHUNK (64u * 1024u)
+
 bool MilcorixUserClient::initWithTask(task_t owningTask, void *securityToken, UInt32 type,
                                       OSDictionary *properties)
 {
@@ -67,22 +75,74 @@ IOReturn MilcorixUserClient::methodGetInfo(IOExternalMethodArguments *args)
 
 IOReturn MilcorixUserClient::methodWrite(IOExternalMethodArguments *args)
 {
-    if (args->scalarInputCount < 1 || !args->structureInput) return kIOReturnBadArgument;
+    if (args->scalarInputCount < 1) return kIOReturnBadArgument;
     uint64_t offset = args->scalarInput[0];
-    uint32_t len    = args->structureInputSize;
-    if (!len || len > MILCORIX_MAX_XFER) return kIOReturnBadArgument;
-    return fOwner->gpuWrite(offset, args->structureInput, len);
+
+    /* Короткий путь: данные уже в памяти ядра. */
+    if (args->structureInput) {
+        uint32_t len = args->structureInputSize;
+        if (!len || len > MILCORIX_MAX_XFER) return kIOReturnBadArgument;
+        return fOwner->gpuWrite(offset, args->structureInput, len);
+    }
+
+    IOMemoryDescriptor *md = args->structureInputDescriptor;
+    if (!md) return kIOReturnBadArgument;
+    uint64_t total = md->getLength();
+    if (!total || total > MILCORIX_MAX_XFER) return kIOReturnBadArgument;
+    if (md->prepare() != kIOReturnSuccess) return kIOReturnVMError;
+
+    void *stage = IOMalloc(MILCORIX_STAGE_CHUNK);
+    if (!stage) { md->complete(); return kIOReturnNoMemory; }
+
+    IOReturn rc = kIOReturnSuccess;
+    uint64_t done = 0;
+    while (done < total) {
+        uint64_t left = total - done;
+        uint32_t chunk = (uint32_t)((left > MILCORIX_STAGE_CHUNK) ? MILCORIX_STAGE_CHUNK : left);
+        if (md->readBytes(done, stage, chunk) != chunk) { rc = kIOReturnVMError; break; }
+        rc = fOwner->gpuWrite(offset + done, stage, chunk);
+        if (rc != kIOReturnSuccess) break;
+        done += chunk;
+    }
+    IOFree(stage, MILCORIX_STAGE_CHUNK);
+    md->complete();
+    return rc;
 }
 
 IOReturn MilcorixUserClient::methodRead(IOExternalMethodArguments *args)
 {
-    if (args->scalarInputCount < 1 || !args->structureOutput) return kIOReturnBadArgument;
+    if (args->scalarInputCount < 1) return kIOReturnBadArgument;
     uint64_t offset = args->scalarInput[0];
-    uint32_t len    = args->structureOutputSize;
-    if (!len || len > MILCORIX_MAX_XFER) return kIOReturnBadArgument;
 
-    IOReturn rc = fOwner->gpuRead(offset, args->structureOutput, len);
-    if (rc == kIOReturnSuccess) args->structureOutputSize = len;
+    if (args->structureOutput) {
+        uint32_t len = args->structureOutputSize;
+        if (!len || len > MILCORIX_MAX_XFER) return kIOReturnBadArgument;
+        IOReturn rc = fOwner->gpuRead(offset, args->structureOutput, len);
+        if (rc == kIOReturnSuccess) args->structureOutputSize = len;
+        return rc;
+    }
+
+    IOMemoryDescriptor *md = args->structureOutputDescriptor;
+    if (!md) return kIOReturnBadArgument;
+    uint64_t total = md->getLength();
+    if (!total || total > MILCORIX_MAX_XFER) return kIOReturnBadArgument;
+    if (md->prepare() != kIOReturnSuccess) return kIOReturnVMError;
+
+    void *stage = IOMalloc(MILCORIX_STAGE_CHUNK);
+    if (!stage) { md->complete(); return kIOReturnNoMemory; }
+
+    IOReturn rc = kIOReturnSuccess;
+    uint64_t done = 0;
+    while (done < total) {
+        uint64_t left = total - done;
+        uint32_t chunk = (uint32_t)((left > MILCORIX_STAGE_CHUNK) ? MILCORIX_STAGE_CHUNK : left);
+        rc = fOwner->gpuRead(offset + done, stage, chunk);
+        if (rc != kIOReturnSuccess) break;
+        if (md->writeBytes(done, stage, chunk) != chunk) { rc = kIOReturnVMError; break; }
+        done += chunk;
+    }
+    IOFree(stage, MILCORIX_STAGE_CHUNK);
+    md->complete();
     return rc;
 }
 
