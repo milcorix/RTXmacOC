@@ -33,6 +33,7 @@
 #include "gsp_rm.h"
 #include "gmmu.h"
 #include "gsp_fifo.h"
+#include "gsp_gr.h"
 #include "gsp_disp.h"
 #include "fw_blob.h"
 #include "nv_dma.h"
@@ -427,6 +428,41 @@ int nv_gsp_bringup(const nv_mmio_t *io, nv_dma_arena_t *ar,
             nv_log(io, "  GSP internal: hClient=0x%08x hDevice=0x%08x hSubdevice=0x%08x; bar1Pde=0x%llx bar2Pde=0x%llx\n",
                    si.h_client, si.h_device, si.h_subdevice,
                    (unsigned long long)si.bar1_pde, (unsigned long long)si.bar2_pde);
+
+            /* --- РАЗВЕДКА СЛОЯ 6: что нужно графическому движку и как устроены
+               прерывания. Оба контрола привилегированные и идут на ВНУТРЕННИЕ
+               хэндлы GSP — тем же путём, которым уже работает дисплей. Ничего не
+               программируем, только спрашиваем: это дёшево и снимает главные
+               неизвестные вычислительного направления за один прогон. */
+            {
+                nv_gsp_gr_ctxbufs cb; uint32_t cbst = 0xffffffffu;
+                int cbrc = nv_gsp_gr_get_ctxbuf_info(&ch, si.h_client, si.h_subdevice,
+                                                     0, &cb, &cbst);
+                if (cbrc == NV_GSP_RM_OK && cbst == 0) {
+                    nv_log(io, "*** СЛОЙ 6: контекстные буферы GR доступны — ненулевых %u из %u ***\n",
+                           cb.count_nonzero, (unsigned)NV_GR_CTXBUF_MAX_IDS);
+                    for (unsigned i = 0; i < NV_GR_CTXBUF_MAX_IDS; i++)
+                        if (cb.buf[i].size)
+                            nv_log(io, "  ctxbuf[%02u] size=%u (%u КиБ) align=%u\n",
+                                   i, cb.buf[i].size, cb.buf[i].size >> 10, cb.buf[i].alignment);
+                } else {
+                    nv_log(io, "СЛОЙ 6: KGR_GET_CONTEXT_BUFFERS_INFO rc=%d status=0x%x — GR-путь под вопросом\n",
+                           cbrc, cbst);
+                }
+
+                nv_gsp_intr_table it; uint32_t itst = 0xffffffffu;
+                int itrc = nv_gsp_intr_get_table(&ch, si.h_client, si.h_subdevice, &it, &itst);
+                if (itrc == NV_GSP_RM_OK && itst == 0) {
+                    nv_log(io, "*** СЛОЙ 6: таблица прерываний получена — записей %u (нужна для recovery) ***\n",
+                           it.count);
+                    for (uint32_t i = 0; i < it.count && i < 12u; i++)
+                        nv_log(io, "  intr[%02u] engine=%u pmc=0x%08x stall=%u nonstall=%u\n",
+                               i, it.entry[i].engine_idx, it.entry[i].pmc_intr_mask,
+                               it.entry[i].vector_stall, it.entry[i].vector_nonstall);
+                } else {
+                    nv_log(io, "СЛОЙ 6: INTR_GET_KERNEL_TABLE rc=%d status=0x%x\n", itrc, itst);
+                }
+            }
         } else {
             nv_log(io, "СЛОЙ 3: GET_GSP_STATIC_INFO FAIL rc=%d\n", sirc);
         }
