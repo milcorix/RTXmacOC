@@ -35,6 +35,9 @@ jobs:
           clang pcie_probe.c -framework IOKit -framework CoreFoundation -o build/pcie_probe
           echo "OK: pcie_probe"
 
+      - name: Offline protocol and memory checks (no GPU)
+        run: make check
+
       - name: Build vbios_dump (portable C, layer 2 step 1)
         run: |
           mkdir -p build

@@ -76,6 +76,12 @@ void     nv_pramin_wr64(const nv_mmio_t *io, uint64_t *win_base, uint64_t phys,
 #define NV_GMMU_PD0E_SIZE          16u    /* dual small+big */
 #define NV_GMMU_PTE_SIZE            8u
 
+/* nouveau: vmm.c выбирает pt[type == SPT], gp100_vmm_pd0_pde пишет
+   pt[0] в +0 (large), pt[1] в +8 (small). Пересказано для соответствия лицензии:
+   https://codebrowser.dev/linux/linux/drivers/gpu/drm/nouveau/nvkm/subdev/mmu/vmm.c.html#nvkm_vmm_ref_hwpt
+   https://codebrowser.dev/linux/linux/drivers/gpu/drm/nouveau/nvkm/subdev/mmu/vmmgp100.c.html#gp100_vmm_pd0_pde */
+#define NV_GMMU_PD0_SMALL_OFF       8u
+
 /* Биты PTE (gp100_vmm_pgt_pte + gp100_vmm_valid), 64-бит слово:
    VALID@0, APERTURE@[2:1], VOL@3, PRIV@5, RO@6, ADDR=(phys>>4), KIND@[63:56]. */
 #define NV_GMMU_PTE_VALID          (1ull << 0)
@@ -125,7 +131,7 @@ void nv_gmmu_zero_table(const nv_mmio_t *io, uint64_t *win_base,
  * Построить полную одноветочную иерархию PD3→PD2→PD1→PD0→SPT для одной страницы
  * виртуального адреса va, указывающей на физическую VRAM-страницу page_phys.
  * Обнуляет все пять таблиц, затем пишет по одной записи на каждом уровне (PD0 —
- * dual: small-half указывает на SPT). Всё через PRAMIN (win_base кэшируется).
+ * dual: small-half @+8 указывает на SPT). Всё через PRAMIN (win_base кэшируется).
  * Возврат 0. Порт nouveau gp100_vmm_pgt_pte/pd0_pde/pd1_pde.
  */
 int nv_gmmu_build_1page(const nv_mmio_t *io, uint64_t *win_base,
@@ -146,5 +152,31 @@ int nv_gmmu_map_range(const nv_mmio_t *io, uint64_t *win_base,
 /* Прочитать записанную SPT-PTE для va (для read-back самопроверки на железе). */
 uint64_t nv_gmmu_read_pte(const nv_mmio_t *io, uint64_t *win_base,
                           uint64_t spt_phys, uint64_t va);
+
+/* Многоветочный диапазон: страницы таблиц по уровням PD3,PD2,PD1,PD0,SPT.
+   Физическая память таблиц предоставляется владельцем VRAM; этот модуль не
+   выделяет VRAM и не регистрирует её в RM. Все таблицы занимают страницы 4 КиБ.
+   Раскладка уровней — gp100_vmm_desc_12 по ссылке выше; расчёт и обход — наши.
+   Пересказано для соответствия лицензии. */
+typedef struct {
+    uint64_t va, bytes;
+    uint64_t table_phys, table_bytes;
+    uint64_t level_phys[NV_GMMU_LEVELS];
+    uint32_t level_count[NV_GMMU_LEVELS];
+} nv_gmmu_range;
+
+/* Только расчёт: никаких MMIO. Возврат 0, -1 для некорректного диапазона,
+   -2 если capacity мало. Даже при -2 out содержит необходимый table_bytes.
+   При -1 out обнулён. VA/размер/база таблиц кратны 4 КиБ; адреса VRAM должны
+   помещаться в наше 40-битное окно PRAMIN (BASE[23:0], единица 64 КиБ). */
+int nv_gmmu_range_plan(uint64_t va, uint64_t bytes, uint64_t table_phys,
+                       uint64_t capacity, nv_gmmu_range *out);
+
+/* Построить НОВЫЕ таблицы для непрерывной физической VRAM. Вызывать только
+   ДО публикации корня в GSP/канал: работающая GPU не должна видеть обнуление.
+   Для изменения живого VMM нужен отдельный путь синхронизации/TLB invalidate.
+   Проверяет план и непересечение данных/таблиц ДО первой записи. 0/-1. */
+int nv_gmmu_range_build(const nv_mmio_t *io, uint64_t *win_base,
+                        const nv_gmmu_range *range, uint64_t phys);
 
 #endif /* RTXMACOC_GMMU_H */

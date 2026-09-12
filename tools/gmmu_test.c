@@ -22,6 +22,7 @@ static uint8_t g_bar0[BAR0_SIZE];
 static uint8_t g_vram[VRAM_SIZE];
 static uint32_t g_aim_writes;   /* сколько раз аимили окно */
 static uint32_t g_last_aim_reg;
+static uint64_t g_mmio_writes;
 
 static uint32_t mock_rd(void *ctx, uint32_t off)
 {
@@ -40,6 +41,7 @@ static uint32_t mock_rd(void *ctx, uint32_t off)
 static void mock_wr(void *ctx, uint32_t off, uint32_t val)
 {
     (void)ctx;
+    g_mmio_writes++;
     if (off == NV_PBUS_BAR0_WINDOW) {
         g_aim_writes++;
         g_last_aim_reg = val;
@@ -59,7 +61,7 @@ static void mock_wr(void *ctx, uint32_t off, uint32_t val)
 
 static void mock_udelay(void *ctx, uint32_t us) { (void)ctx; (void)us; }
 
-static const nv_mmio_t g_io = { NULL, mock_rd, mock_wr, mock_udelay };
+static const nv_mmio_t g_io = { NULL, mock_rd, mock_wr, mock_udelay, NULL };
 
 /* Прямое чтение модели VRAM (в обход окна) — для независимой проверки. */
 static uint64_t vram_rd64(uint64_t pa)
@@ -178,10 +180,10 @@ static void test_build_1page(void)
     CHECK(vram_rd64(t.pd2_phys + i2*8) == nv_gmmu_make_pde_vram(t.pd1_phys), "PD2 entry");
     uint32_t i1 = nv_gmmu_pde_index(va, NV_GMMU_PD1_SHIFT, NV_GMMU_PD1_ENTRIES);
     CHECK(vram_rd64(t.pd1_phys + i1*8) == nv_gmmu_make_pde_vram(t.pd0_phys), "PD1 entry");
-    /* PD0 dual: small → SPT, big=0 */
+    /* Независимая проверка раскладки nouveau: small в старшей половине. */
     uint32_t i0 = nv_gmmu_pde_index(va, NV_GMMU_PD0_SHIFT, NV_GMMU_PD0_ENTRIES);
-    CHECK(vram_rd64(t.pd0_phys + i0*16) == nv_gmmu_make_pde_vram(t.spt_phys), "PD0 small");
-    CHECK(vram_rd64(t.pd0_phys + i0*16 + 8) == 0, "PD0 big должно быть 0");
+    CHECK(vram_rd64(t.pd0_phys + i0*16 + 8) == nv_gmmu_make_pde_vram(t.spt_phys), "PD0 small @+8");
+    CHECK(vram_rd64(t.pd0_phys + i0*16) == 0, "PD0 big @+0 должно быть 0");
     /* SPT[17] → page */
     uint64_t pte = nv_gmmu_read_pte(&g_io, &win, t.spt_phys, va);
     CHECK(pte == nv_gmmu_make_pte_vram(page, 0, 0), "SPT PTE readback=0x%llx",
@@ -217,6 +219,85 @@ static void test_map_range(void)
           "пересечение границы SPT должно дать -1");
 }
 
+/* Обходчик не использует планировщик, его индексы или кодировщики: начинает
+   с корня и следует байтам PDE, как аппаратный page walk. Неверное размещение
+   ветки или перепутанные small/large так не может пройти вместе с реализацией. */
+static int walk(uint64_t root, uint64_t va, uint64_t *phys)
+{
+    const unsigned shifts[] = {47, 38, 29, 21, 12};
+    const unsigned masks[] = {3, 511, 511, 255, 511};
+    uint64_t table = root;
+    for (unsigned level = 0; level < 5; level++) {
+        uint64_t index = (va >> shifts[level]) & masks[level];
+        uint64_t pa = table + index * (level == 3 ? 16 : 8) + (level == 3 ? 8 : 0);
+        if (pa > VRAM_SIZE - 8) return -1;
+        uint64_t entry = vram_rd64(pa);
+        if (level == 4) {
+            if (!(entry & 1)) return -1;
+            *phys = ((entry & 0x000000ffffffffff00ull) << 4) | (va & 4095);
+            return 0;
+        }
+        if ((entry & 6) != 2) return -1;
+        table = (entry & 0x000000ffffffffff00ull) << 4;
+    }
+    return -1;
+}
+
+static void test_large_range(uint64_t va, uint64_t bytes)
+{
+    printf("[multibranch va=0x%llx bytes=0x%llx]\n",
+           (unsigned long long)va, (unsigned long long)bytes);
+    const uint64_t tables = 0x200000, phys = 0x180000000ull;
+    nv_gmmu_range r;
+    int rc = nv_gmmu_range_plan(va, bytes, tables, VRAM_SIZE - tables - 8, &r);
+    CHECK(rc == 0, "plan rc=%d", rc);
+    if (rc) return;
+    memset(g_vram + tables - 8, 0xa5, (size_t)r.table_bytes + 16);
+    uint64_t win = ~0ull;
+    CHECK(nv_gmmu_range_build(&g_io, &win, &r, phys) == 0, "range build");
+    CHECK(vram_rd64(tables - 8) == 0xa5a5a5a5a5a5a5a5ull, "запись перед таблицами");
+    CHECK(vram_rd64(tables + r.table_bytes) == 0xa5a5a5a5a5a5a5a5ull, "запись за таблицами");
+    uint64_t got = 0;
+    for (uint64_t offset = 0; offset < bytes; offset += 4096) {
+        if (walk(tables, va + offset + 4095, &got) || got != phys + offset + 4095) {
+            CHECK(0, "ошибка трансляции offset=0x%llx got=0x%llx",
+                  (unsigned long long)offset, (unsigned long long)got);
+            break;
+        }
+    }
+    if (va) CHECK(walk(tables, va - 1, &got) != 0, "адрес перед диапазоном замаплен");
+    if (va + bytes < (1ull << 49))
+        CHECK(walk(tables, va + bytes, &got) != 0, "адрес за диапазоном замаплен");
+    if (va == 0x20000000 && bytes == (1ull << 30)) {
+        CHECK(r.level_count[3] == 2 && r.level_count[4] == 512, "1 ГиБ: две PD0 и 512 SPT");
+        CHECK(r.table_bytes == 517ull * 4096, "1 ГиБ: 517 страниц таблиц");
+    }
+}
+
+static void test_range_reject(void)
+{
+    printf("[multibranch validation before MMIO]\n");
+    nv_gmmu_range r;
+    const uint64_t end = 1ull << 40;
+    CHECK(nv_gmmu_range_plan(0, 0, 0, 0, &r) == -1 && r.table_bytes == 0, "пустой диапазон");
+    CHECK(nv_gmmu_range_plan(1, 4096, 0, end, &r) == -1, "VA не выровнен");
+    CHECK(nv_gmmu_range_plan(0, 4097, 0, end, &r) == -1, "размер не выровнен");
+    CHECK(nv_gmmu_range_plan(0, 4096, 1, end, &r) == -1, "таблицы не выровнены");
+    CHECK(nv_gmmu_range_plan((1ull<<49)-4096, 8192, 0, end, &r) == -1, "VA overflow");
+    CHECK(nv_gmmu_range_plan(0, ~0xfffull, 0, end, &r) == -1, "size overflow");
+    CHECK(nv_gmmu_range_plan(0, 4096, end-4096, end, &r) == -1, "таблицы за пределом PRAMIN");
+    CHECK(nv_gmmu_range_plan(0, 1ull<<30, 0x200000, 0, &r) == -2 && r.table_bytes > 0,
+          "недостаточная арена должна сообщить требуемый размер");
+    CHECK(nv_gmmu_range_plan(0, 1ull<<30, 0x200000, r.table_bytes, &r) == 0, "точный размер арены");
+    uint64_t win = ~0ull, before = g_mmio_writes;
+    CHECK(nv_gmmu_range_build(&g_io, &win, &r, 0x200000) == -1, "данные пересекаются с таблицами");
+    CHECK(nv_gmmu_range_build(&g_io, &win, &r, end-4096) == -1, "данные за пределом PRAMIN");
+    CHECK(nv_gmmu_range_build(&g_io, &win, &r, 0x180000001ull) == -1, "phys не выровнен");
+    r.level_phys[4] += 4096;
+    CHECK(nv_gmmu_range_build(&g_io, &win, &r, 0x180000000ull) == -1, "повреждённый план");
+    CHECK(g_mmio_writes == before, "ошибочные запросы не должны писать MMIO");
+}
+
 int main(void)
 {
     printf("=== gmmu offline test ===\n");
@@ -225,6 +306,12 @@ int main(void)
     test_va_index();
     test_build_1page();
     test_map_range();
+    test_large_range(0x20000000, 1ull << 30);
+    test_large_range(0x1ff000, (1ull << 30) + 0x3000);
+    test_large_range((1ull << 38) - 4096, 8192);
+    test_large_range((1ull << 47) - 4096, 8192);
+    test_large_range((1ull << 49) - 8192, 8192);
+    test_range_reject();
     if (g_fail) { printf("\n%d проверок провалено\n", g_fail); return 1; }
     printf("\nвсе проверки пройдены\n");
     return 0;

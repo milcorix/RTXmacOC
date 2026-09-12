@@ -57,18 +57,13 @@ jobs:
 
       - name: Build full GSP bring-up harness (portable core + Linux platform)
         run: |
-          # Полный линк: Linux-платформа (VFIO) + ПЕРЕНОСИМЫЙ оркестратор
-          # driver/gsp/gsp_bringup.c (слои 2-5, общий с kext). Ловит регрессии
-          # рефактора «вынести main-оркестрацию в core».
-          cc -Wall -Wextra -O2 \
-            tools/gsp_boot_linux.c tools/fw_blob_linux.c \
-            driver/gsp/gsp_bringup.c \
-            driver/gsp/falcon.c driver/gsp/fwsec_locate.c driver/gsp/fwsec_patch.c \
-            driver/gsp/fb_layout.c driver/gsp/booter.c driver/gsp/gsp_fw.c driver/gsp/elf64.c \
-            driver/gsp/gsp_rpc.c driver/gsp/gsp_rm.c driver/gsp/gmmu.c driver/gsp/gsp_fifo.c \
-            driver/gsp/gsp_disp.c \
-            -o build/gsp_boot_linux
-          echo "OK: tools/gsp_boot_linux (полный bring-up)"
+          # Один список исходников для стенда и CI: новые модули больше не
+          # теряются между Makefile и ручной командой workflow.
+          make gsp-boot-linux
+          cp tools/gsp_boot_linux build/gsp_boot_linux
+
+      - name: Offline protocol and memory checks (no GPU)
+        run: make check
 
       - name: Upload build artifacts
         if: always()

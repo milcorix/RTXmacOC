@@ -54,4 +54,5 @@ Tahoe_NVIDIA_Root_Patch/
 # перенесено в docs/macos-runbook.md.
 b99c30bf-*
 tools/gsp_gr_test
+tools/vram_test
 __pycache__/

@@ -166,14 +166,15 @@ int main(int argc, char **argv)
     nv_gsp_debug_t dbg={.ctx=NULL,.dump=dbg_dump};
 
     /* Linux-стенд — диагностический прогон: dbg!=NULL включает дампы и длинные
-       паузы «разглядеть монитор». scan не нужен (стенд не публикует апертуру),
+       паузы «разглядеть монитор». scan нужен для оценки сканирования в логе,
        провайдер FB не нужен (FB берётся во VRAM и заливается через PRAMIN).
        А вот контекст исполнения нужен обязательно: без него ядро не выполнит
        самопроверку слоя 6, и вычислительный путь на железе останется
        непроверенным — притом что стенд для этого и существует. */
     nv_gsp_gpu_ctx_t gpu;
+    nv_gsp_scanout_t scan;
     memset(&gpu, 0, sizeof(gpu));
-    int rc=nv_gsp_bringup(&io,&ar,&pci,&dbg,NULL,NULL,&gpu);
+    int rc=nv_gsp_bringup(&io,&ar,&pci,&dbg,&scan,NULL,&gpu);
 
     struct vfio_iommu_type1_dma_unmap u={.argsz=sizeof(u),.iova=ARENA_IOVA,.size=ARENA_SIZE};
     ioctl(v.container,VFIO_IOMMU_UNMAP_DMA,&u); munmap(abuf,ARENA_SIZE); vfio_close(&v);

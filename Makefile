@@ -19,6 +19,22 @@ DATE     := $(shell date +%Y%m%d)
 
 .PHONY: probe run dump clean mmio-linux vbios-dump booter-parse-test booter-run-linux gsp-stage-test gsp-boot-linux gsp-rpc-test gsp-rm-test gmmu-test gsp-fifo-test gsp-disp-test gsp-gr-test
 
+# Проверки модели и протокола, не требующие ни GPU, ни подписанных прошивок.
+# Этот результат не является аппаратным подтверждением ни Linux, ни macOS.
+.PHONY: check
+check: gsp-rpc-test gsp-rm-test gmmu-test gsp-fifo-test gsp-disp-test gsp-gr-test vram-test
+	./tools/gsp_rpc_test
+	./tools/gsp_rm_test
+	./tools/gmmu_test
+	./tools/gsp_fifo_test
+	./tools/gsp_disp_test
+	./tools/gsp_gr_test
+	./tools/vram_test
+
+.PHONY: vram-test
+vram-test:
+	$(CC) $(CFLAGS) tools/vram_test.c driver/gsp/vram.c -o tools/vram_test
+
 probe: $(PROBE_BIN)
 
 $(PROBE_BIN): $(PROBE_SRC) ada_regs.h

@@ -13,6 +13,29 @@
 
 ---
 
+## Многоветочный GMMU и учёт VRAM — 2026-09-12
+
+Статус: **OFFLINE/SRC**, аппаратная проверка нового кода отдельно на каждой ОС.
+Цель/метрики: [DRIVER-PLAN.md](DRIVER-PLAN.md).
+
+| Наш код | Источник | Что проверено |
+|---|---|---|
+| `gmmu.c: nv_gmmu_range_plan/build` | [nouveau gp100_vmm_desc_12, gp100_vmm_pd1_pde, gp100_vmm_pgt_pte](https://codebrowser.dev/linux/linux/drivers/gpu/drm/nouveau/nvkm/subdev/mmu/vmmgp100.c.html) | Радикс 2/9/9/8/9, PDE 8б и dual-PDE 16б, страницы таблиц 4К, PTE для VRAM. Расчёт арены и диапазонный обход — собственные |
+| `NV_GMMU_PD0_SMALL_OFF=8` | [nouveau nvkm_vmm_ref_hwpt](https://codebrowser.dev/linux/linux/drivers/gpu/drm/nouveau/nvkm/subdev/mmu/vmm.c.html#nvkm_vmm_ref_hwpt), [gp100_vmm_pd0_pde](https://codebrowser.dev/linux/linux/drivers/gpu/drm/nouveau/nvkm/subdev/mmu/vmmgp100.c.html#gp100_vmm_pd0_pde), [VMM_WO128](https://codebrowser.dev/linux/linux/drivers/gpu/drm/nouveau/nvkm/subdev/mmu/vmm.h.html#381) | SPT выбирается индексом 1 в `pt[]`; этот элемент пишется в старшие 8 байт PDE. Прежняя запись SPT в @+0 была ошибкой |
+| `vram.c` | Собственная логика управления диапазонами | Полуоткрытые диапазоны, исключения, page alignment, handle без повторного использования, проверки переполнений; новых аппаратных определений нет |
+
+Пересказано для соответствия лицензии. Исторический тест проверял одну и ту же
+ошибку с реализацией PD0, поэтому заменён независимым обходом записанных байтов.
+Новая проверка проходит по всему 1 ГиБ, а также пересекает границы 256 ГиБ и
+128 ТиБ в GPU VA с небольшими диапазонами. Это проверка формата таблиц, а не
+наличия такого объёма физической VRAM или аппаратного исполнения GPU.
+
+Новый builder предназначен для ещё не опубликованного VMM: обнуление живых
+таблиц и TLB-инвалидация не реализованы этим API. Выделения `vram.c` требуют
+внешнего замка, завершения GPU-команд до free и очистки перед сменой владельца.
+
+---
+
 ## Слой 1
 
 | Наш код | Upstream | Что взято | Сверено |
