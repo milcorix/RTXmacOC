@@ -29,22 +29,43 @@ exec > "$LOG" 2>&1
 drv_of() { basename "$(readlink "/sys/bus/pci/devices/$1/driver" 2>/dev/null)" 2>/dev/null; }
 
 restore_gui() {
+    local result=$? restore_failed=0 fn expected current
     echo "-- [restore] вернуть GPU nvidia и поднять gdm --"
     for fn in "$BDF" "$AUD"; do
         [ -e "/sys/bus/pci/devices/$fn" ] || continue
         if [ -e "/sys/bus/pci/devices/$fn/driver" ] && [ "$(drv_of "$fn")" = "vfio-pci" ]; then
-            timeout 15 bash -c "echo '$fn' > /sys/bus/pci/devices/$fn/driver/unbind" 2>/dev/null || true
+            timeout 15 bash -c 'printf "%s\n" "$1" > "$2"' _ \
+                "$fn" "/sys/bus/pci/devices/$fn/driver/unbind" || restore_failed=1
         fi
-        echo "" > "/sys/bus/pci/devices/$fn/driver_override" 2>/dev/null || true
+        echo "" > "/sys/bus/pci/devices/$fn/driver_override" || restore_failed=1
     done
     modprobe -r vfio_pci vfio_iommu_type1 vfio 2>/dev/null || true
     modprobe nvidia_drm 2>/dev/null || modprobe nvidia 2>/dev/null || true
     modprobe snd_hda_intel 2>/dev/null || true
+    # Снятие driver_override не запускает probe. Уже загруженный snd_hda_intel
+    # не перепривяжет аудиофункцию от одного modprobe — нужен явный bind.
+    # Пересказано по https://www.kernel.org/doc/Documentation/ABI/testing/sysfs-bus-pci
+    for fn in "$BDF" "$AUD"; do
+        [ -e "/sys/bus/pci/devices/$fn" ] || continue
+        expected=nvidia
+        [ "$fn" = "$AUD" ] && expected=snd_hda_intel
+        current="$(drv_of "$fn")"
+        if [ -z "$current" ]; then
+            timeout 15 bash -c 'printf "%s\n" "$1" > "$2"' _ \
+                "$fn" "/sys/bus/pci/drivers/$expected/bind" || restore_failed=1
+        fi
+        current="$(drv_of "$fn")"
+        echo "   $fn -> ${current:-(none)}; expected=$expected"
+        if [ "$current" != "$expected" ]; then restore_failed=1; fi
+    done
     sleep 2
-    echo "   card driver now: $(drv_of "$BDF")"
-    systemctl start gdm 2>/dev/null || true
-    echo "=== DONE $(date -u +%FT%TZ) ==="
-    touch "$DIR/gsp-boot-DONE"
+    systemctl start gdm || restore_failed=1
+    # Завершение стенда и возврат устройств — разные результаты. Не объявляем
+    # службу успешной, если тест прошёл, а восстановление устройств не удалось.
+    if [ "$restore_failed" -ne 0 ] && [ "$result" -eq 0 ]; then result=3; fi
+    echo "=== DONE $(date -u +%FT%TZ) rc=$result restore_failed=$restore_failed ==="
+    printf 'rc=%s restore_failed=%s\n' "$result" "$restore_failed" > "$DIR/gsp-boot-DONE"
+    exit "$result"
 }
 echo "=== run-gsp-boot-detached $(date -u +%FT%TZ) ==="
 echo "kernel: $(uname -r)"

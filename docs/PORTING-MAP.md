@@ -18,6 +18,13 @@
 Статус: **OFFLINE/SRC**, аппаратная проверка нового кода отдельно на каждой ОС.
 Цель/метрики: [DRIVER-PLAN.md](DRIVER-PLAN.md).
 
+Подготовка аппаратного прогона: `tools/run-gsp-boot-detached.sh` возвращает обе
+PCI-функции через явный `drivers/<driver>/bind`, затем проверяет `driver` symlink.
+Основание — [Linux PCI sysfs ABI: bind/unbind/driver_override](https://www.kernel.org/doc/Documentation/ABI/testing/sysfs-bus-pci).
+Снятие override возвращает обычный выбор драйвера, но не заменяет привязку
+отсоединённого устройства к уже загруженному модулю. Пересказано для соответствия
+лицензии. Статус — SRC/OFFLINE (`tools/gsp_restore_test.py`), не HW.
+
 ### Подключение внешнего VMM (после `c4c559b`)
 
 Сверены [r535_mmu_vaspace_new / r535_mmu_promote_vmm](https://codebrowser.dev/linux/linux/drivers/gpu/drm/nouveau/nvkm/subdev/gsp/rm/r535/vmm.c.html)

@@ -21,8 +21,8 @@ DATE     := $(shell date +%Y%m%d)
 
 # Проверки модели и протокола, не требующие ни GPU, ни подписанных прошивок.
 # Этот результат не является аппаратным подтверждением ни Linux, ни macOS.
-.PHONY: check abi-check
-check: abi-check gsp-rpc-test gsp-rm-test gmmu-test gsp-fifo-test gsp-disp-test gsp-gr-test vram-test gsp-memory-test
+.PHONY: check abi-check gsp-restore-test
+check: abi-check gsp-rpc-test gsp-rm-test gmmu-test gsp-fifo-test gsp-disp-test gsp-gr-test vram-test gsp-memory-test gsp-restore-test
 	./tools/gsp_rpc_test
 	./tools/gsp_rm_test
 	./tools/gmmu_test
@@ -35,6 +35,10 @@ check: abi-check gsp-rpc-test gsp-rm-test gmmu-test gsp-fifo-test gsp-disp-test 
 abi-check:
 	$(CC) -std=c11 -Wall -Wextra -Werror -x c -fsyntax-only driver/macos/MilcorixABI.h
 	$(CXX) -std=c++17 -Wall -Wextra -Werror -x c++ -fsyntax-only driver/macos/MilcorixABI.h
+
+gsp-restore-test:
+	bash -n tools/run-gsp-boot-detached.sh
+	python3 tools/gsp_restore_test.py
 
 .PHONY: gsp-memory-test
 gsp-memory-test:
