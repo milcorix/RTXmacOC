@@ -77,6 +77,7 @@ public:
     // --- IOService ---
     virtual bool     start(IOService *provider) override;
     virtual void     stop(IOService *provider) override;
+    virtual void     free(void) override;
     /* Переопределяем ИМЕННО 4-аргументный вариант: его переопределяет и сам
        IOFramebuffer, а 5-аргументный в этой иерархии не виртуален так, как
        ожидалось. */
@@ -141,7 +142,9 @@ public:
        честно и без единого нового допущения о железе. Когда включат Resizable
        BAR, эти же операции заменятся прямым маппингом. */
     bool     gpuReady(void) const { return fGpu.ok; }
+    bool     gpuPoolVerified(void) const { return fGpu.ok && fGpu.external_vmm && fGpu.pool_selftest_ok; }
     uint64_t gpuScratchSize(void) const { return fGpu.scratch_size; }
+    uint64_t gpuScratchVA(void) const { return fGpu.scratch_va; }
     uint32_t gpuChannel(void) const { return fGpu.h_channel; }
     uint32_t gpuCopyEngine(void) const { return fGpu.h_ce; }
     IOReturn gpuWrite(uint64_t offset, const void *data, uint32_t len);
@@ -200,7 +203,7 @@ private:
        потоке вызывающего и не сериализуются, поэтому два клиента без замка
        увели бы чужую запись в соседнее окно — а там лежат таблицы страниц и
        instance block канала. Тихая порча без единой строки в журнале. */
-    IOLock               *fGpuLock;
+    IOLock               *fGpuLock = nullptr;
     uint32_t              fGpuClients;   /* сколько клиентов слоя 6 открыто */
 
     /* Дисплей уже запрограммирован на scanout-буфер (ctx-dma + окно). Пока это

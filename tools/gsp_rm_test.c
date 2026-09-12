@@ -500,6 +500,48 @@ static void test_layout(void)
           "level.pageShift @20");
 }
 
+static void test_external_vmm(void)
+{
+    printf("[external VMM: ctor + device PDB]\n");
+    nv_gsp_rpc_chan ch; chan_init(&ch);
+    uint8_t allocReply[32] = {0};
+    put_msg(g_shm, &ch.lay, 0, NV_VGPU_MSG_FUNCTION_GSP_RM_ALLOC, 0, allocReply, sizeof(allocReply), 1);
+    set_msgq_wptr(g_shm, &ch.lay, 1);
+    uint32_t handle = 0, status = ~0u;
+    CHECK(nv_gsp_rm_vaspace_external_ctor(&ch, NV_GSP_RM_CLIENT_HANDLE, NV_GSP_RM_DEVICE_HANDLE,
+                                         &handle, &status) == 0 && status == 0, "external ctor");
+    const uint8_t *request = g_shm + ch.lay.cmdq_off + NV_GSP_QUEUE_ENTRYOFF + NV_GSP_RPC_PAYLOAD_OFF;
+    CHECK(ld32(request + 12) == 0x90f1, "FERMI_VASPACE_A");
+    CHECK(ld32(request + 20) == 48 && ld32(request + 32 + 4) == 8, "48b params, external flag bit3");
+
+    for (unsigned rejected = 0; rejected < 2; rejected++) {
+        chan_init(&ch);
+        uint8_t reply[24 + 32] = {0};
+        st32(reply + 12, rejected ? 0x5d : 0);
+        put_msg(g_shm, &ch.lay, 0, NV_VGPU_MSG_FUNCTION_GSP_RM_CONTROL, 0, reply, sizeof(reply), 1);
+        set_msgq_wptr(g_shm, &ch.lay, 1);
+        int rc = nv_gsp_rm_set_page_directory(&ch, NV_GSP_RM_CLIENT_HANDLE, NV_GSP_RM_DEVICE_HANDLE,
+                                              handle, 0x180002000ull, &status);
+        /* rc сообщает доставку RPC; отказ RM возвращается отдельно в status. */
+        CHECK(rc == NV_GSP_RM_OK && status == (rejected ? 0x5du : 0u),
+              "PDB status не теряется");
+        request = g_shm + ch.lay.cmdq_off + NV_GSP_QUEUE_ENTRYOFF + NV_GSP_RPC_PAYLOAD_OFF;
+        CHECK(ld32(request + 4) == NV_GSP_RM_DEVICE_HANDLE, "control на DEVICE, не VASPACE");
+        CHECK(ld32(request + 8) == 0x801813 && ld32(request + 16) == 32, "control opcode/size");
+        const uint8_t *params = request + 24;
+        CHECK(ld64t(params) == 0x180002000ull && ld32(params + 8) == 4, "root above 4 GiB, 4 entries");
+        CHECK(ld32(params + 12) == 0 && ld32(params + 16) == handle, "VIDMEM flags + handle");
+        CHECK(ld32(params + 20) == 0 && ld32(params + 24) == 0 && ld32(params + 28) == 0,
+              "channel/subdevice/pasid default");
+        uint32_t before = ch.cmdq_wptr;
+        CHECK(nv_gsp_rm_set_page_directory(&ch, 1, 2, handle, 0x123, &status) != 0,
+              "невыровненный root отвергнут");
+        CHECK(nv_gsp_rm_set_page_directory(&ch, 1, 2, handle, 1ull<<40, &status) != 0,
+              "root вне PRAMIN отвергнут");
+        CHECK(ch.cmdq_wptr == before, "при неверных аргументах нет RPC");
+    }
+}
+
 int main(void)
 {
     test_basic_call();
@@ -514,6 +556,7 @@ int main(void)
     test_vmem_ctor();
     test_map_memory_dma();
     test_copy_pdes();
+    test_external_vmm();
     test_layout();
     printf(failed ? "\n=== gsp_rm_test: ЕСТЬ ПРОВАЛЫ ===\n" : "\n=== gsp_rm_test: ВСЕ ТЕСТЫ ПРОШЛИ ===\n");
     return failed ? 1 : 0;

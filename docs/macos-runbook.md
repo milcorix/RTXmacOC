@@ -32,6 +32,55 @@ RAM: картинки нет, а заодно тихо портится памя
 
 ## Стадии
 
+### Проверка нового пула VRAM (2026-09-12, аппаратно ещё не принята)
+
+План полной реализации — [DRIVER-PLAN.md](DRIVER-PLAN.md). Новый режим памяти
+включается отдельно от стадии драйвера: boot-arg `milcorixvram=1024` выделяет
+пул **1024 МиБ данных приложения**, сверх служебных страниц GSP/канала/GMMU.
+Допустимо 1024..4096; 0 или отсутствие аргумента оставляет прежний 1-МиБ тест.
+На стадии `milcorix=1` выполняются внутренние GPU-пробы, но user-client для
+приложения требует зарегистрированного MilcorixFB на стадии `milcorix=2`.
+
+После сборки и установки нового kext на целевой macOS с
+`milcorix=2 milcorixvram=1024`:
+
+```sh
+mkdir -p build
+clang -O2 -Wall -Wextra -framework IOKit -framework CoreFoundation \
+    tools/milcorix_gpu.c -o build/milcorix_gpu
+sw_vers
+uname -a
+git rev-parse HEAD
+./build/milcorix_gpu --vram-test > build/macos-vram-test.log 2>&1
+echo "resource test rc=$?"
+cat build/macos-vram-test.log
+```
+
+Приёмка: `macOS allocation ... bytes=1073741824`, три `macOS GPU copy ... MATCH`
+и `macOS resource test PASS`. Утилита проверяет очистку выделенного ресурса в
+трёх точках, копирование, выход за границу и недействительность handle после
+освобождения. Каждая передача ограничена 4 МиБ; ресурс при этом занимает 1 ГиБ.
+PASS относится к этому тесту памяти/CE и не подтверждает шейдеры или Metal.
+Сохранить журнал kext, вывод выше, конфигурацию OpenCore и SHA kext вместе в
+`docs/hw-dumps/`; аппаратный статус macOS ставится только по реальному прогону.
+
+Для отдельной проверки того же ядра на Linux/VFIO:
+
+```sh
+make check gsp-boot-linux
+# Выполнять из корня репозитория. Прогон временно завершает графическую сессию.
+sudo systemd-run --unit=rtx-vram --collect bash \
+    "$PWD/tools/run-gsp-boot-detached.sh" 1024
+```
+
+После завершения службы читать `tools/gsp-boot.log` и `tools/hw_verdict.sh`.
+Нужны `DMA_SET_PAGE_DIRECTORY ... status=0x0`, две `VRAM GPU probe ... rc=0
+mismatches=0` и финальный `HW-Linux VRAM pool: PASS requested=1024 MiB`.
+Служба сохраняет ненулевой код завершения при сбое стенда/проб. Linux-результат
+подтверждает только Linux; он не заменяет запуск kext/IOKit-теста на macOS.
+
+### Выбор стадии драйвера
+
 | `milcorix=` | Что делает | Чем рискуем |
 |---|---|---|
 | `0` (дефолт) | ничего, kext не подключается | ничем |

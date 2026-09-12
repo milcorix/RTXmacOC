@@ -21,24 +21,97 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
+#include <errno.h>
 #include <IOKit/IOKitLib.h>
+#include "../driver/macos/MilcorixABI.h"
 
-#define MILCORIX_CONNECT_TYPE   0x4D4C4358u   /* 'MLCX' */
+_Static_assert(sizeof(MilcorixGpuInfo) == 24, "legacy ABI");
+_Static_assert(sizeof(MilcorixMemoryInfo) == 40, "memory ABI");
 
-enum {
-    kMilcorixMethodGetInfo = 0,
-    kMilcorixMethodWrite   = 1,
-    kMilcorixMethodRead    = 2,
-    kMilcorixMethodCopy    = 3,
-};
+static kern_return_t buffer_read(io_connect_t conn, uint64_t handle, uint64_t offset,
+                                  void *data, size_t bytes)
+{
+    uint64_t args[2] = {handle, offset};
+    size_t actual = bytes;
+    kern_return_t kr = IOConnectCallMethod(conn, kMilcorixMethodReadBuffer, args, 2,
+                                          NULL, 0, NULL, NULL, data, &actual);
+    return kr == KERN_SUCCESS && actual != bytes ? KERN_FAILURE : kr;
+}
 
-typedef struct {
-    uint32_t ready;
-    uint32_t channel;
-    uint32_t copy_engine;
-    uint32_t reserved;
-    uint64_t scratch_size;
-} MilcorixGpuInfo;
+static int check_vram(io_connect_t conn)
+{
+    const uint64_t gib = 1ull << 30;
+    const size_t bytes = 65536;
+    MilcorixMemoryInfo info = {0};
+    size_t size = sizeof(info);
+    kern_return_t kr = IOConnectCallStructMethod(conn, kMilcorixMethodGetMemoryInfo,
+                                                 NULL, 0, &info, &size);
+    if (kr || size != sizeof(info) || info.size != sizeof(info) ||
+        info.version != MILCORIX_MEMORY_ABI_VERSION || !(info.flags & MILCORIX_MEMORY_READY) ||
+        info.pool_bytes < gib) {
+        fprintf(stderr, "Ресурс 1 ГиБ не готов: GetMemoryInfo=0x%x flags=0x%x bytes=%llu.\n"
+                        "Нужен новый kext и milcorix=2 milcorixvram=1024.\n", kr, info.flags,
+                (unsigned long long)info.pool_bytes);
+        return 1;
+    }
+    printf("macOS VRAM ABI=%u pool=%llu MiB flags=0x%x\n", info.version,
+           (unsigned long long)(info.pool_bytes >> 20), info.flags);
+    uint8_t *src = malloc(bytes), *back = malloc(bytes);
+    uint64_t handle = 0, allocated[2] = {0}, allocArgs[2] = {gib, 65536};
+    uint32_t count = 2;
+    int result = 1;
+    if (!src || !back) goto done;
+    kr = IOConnectCallScalarMethod(conn, kMilcorixMethodAlloc, allocArgs, 2, allocated, &count);
+    if (kr || count != 2 || !allocated[0] || allocated[1] != gib) {
+        fprintf(stderr, "Alloc 1 GiB: 0x%x\n", kr); goto done;
+    }
+    handle = allocated[0];
+    printf("macOS allocation: handle=%llu bytes=%llu\n",
+           (unsigned long long)handle, (unsigned long long)allocated[1]);
+    uint64_t destinations[] = {bytes, gib / 2 - bytes / 2, gib - bytes};
+    for (unsigned probe = 0; probe < 3; probe++) {
+        /* До записи ресурс должен быть очищен, включая дальние страницы. */
+        memset(back, 0xa5, bytes);
+        kr = buffer_read(conn, handle, destinations[probe], back, bytes);
+        if (kr) { fprintf(stderr, "Read zero: 0x%x\n", kr); goto done; }
+        for (size_t i = 0; i < bytes; i++) if (back[i]) {
+            fprintf(stderr, "Новый ресурс содержит ненулевые данные @%llu\n",
+                    (unsigned long long)(destinations[probe] + i)); goto done;
+        }
+        for (size_t i = 0; i < bytes; i++) src[i] = (uint8_t)(i * 37 + (i >> 8) + probe + 1);
+        uint64_t writeArgs[2] = {handle, 0};
+        kr = IOConnectCallMethod(conn, kMilcorixMethodWriteBuffer, writeArgs, 2,
+                                 src, bytes, NULL, NULL, NULL, NULL);
+        if (kr) { fprintf(stderr, "WriteBuffer: 0x%x\n", kr); goto done; }
+        uint64_t copyArgs[5] = {handle, 0, handle, destinations[probe], bytes}, ns = 0;
+        count = 1;
+        kr = IOConnectCallScalarMethod(conn, kMilcorixMethodCopyBuffer, copyArgs, 5, &ns, &count);
+        if (kr || count != 1) { fprintf(stderr, "CopyBuffer: 0x%x\n", kr); goto done; }
+        memset(back, 0, bytes);
+        kr = buffer_read(conn, handle, destinations[probe], back, bytes);
+        if (kr || memcmp(src, back, bytes)) {
+            fprintf(stderr, "Проверка результата не прошла: Read=0x%x dst=%llu\n",
+                    kr, (unsigned long long)destinations[probe]); goto done;
+        }
+        printf("macOS GPU copy: dst=%llu bytes=%zu MATCH; host fence wait=%llu ns\n",
+               (unsigned long long)destinations[probe], bytes, (unsigned long long)ns);
+    }
+    if (buffer_read(conn, handle, gib, back, 4) != kIOReturnBadArgument) {
+        fprintf(stderr, "Доступ за границей ресурса не отвергнут\n"); goto done;
+    }
+    kr = IOConnectCallScalarMethod(conn, kMilcorixMethodFree, &handle, 1, NULL, NULL);
+    if (kr) { fprintf(stderr, "Free: 0x%x\n", kr); goto done; }
+    if (buffer_read(conn, handle, 0, back, 4) != kIOReturnBadArgument) {
+        fprintf(stderr, "Освобождённый handle не отвергнут\n"); handle = 0; goto done;
+    }
+    handle = 0;
+    printf("macOS resource test PASS: 1 GiB allocation, 3 GPU copy probes, bounds and free.\n");
+    result = 0;
+done:
+    if (handle) IOConnectCallScalarMethod(conn, kMilcorixMethodFree, &handle, 1, NULL, NULL);
+    free(src); free(back);
+    return result;
+}
 
 static io_connect_t open_driver(void)
 {
@@ -66,7 +139,22 @@ static io_connect_t open_driver(void)
 
 int main(int argc, char **argv)
 {
-    uint32_t bytes = (argc > 1) ? (uint32_t)strtoul(argv[1], NULL, 0) : (256u * 1024u);
+    if (argc == 2 && !strcmp(argv[1], "--vram-test")) {
+        io_connect_t conn = open_driver();
+        if (!conn) return 1;
+        int result = check_vram(conn);
+        IOServiceClose(conn);
+        return result;
+    }
+    uint32_t bytes = 256u * 1024u;
+    if (argc > 1) {
+        char *end = NULL; errno = 0;
+        unsigned long value = strtoul(argv[1], &end, 0);
+        if (argc != 2 || errno || !end || *end || !value || value > MILCORIX_MAX_XFER) {
+            fprintf(stderr, "usage: milcorix_gpu [1..4194304 bytes | --vram-test]\n"); return 2;
+        }
+        bytes = (uint32_t)value;
+    }
 
     io_connect_t conn = open_driver();
     if (!conn) return 1;

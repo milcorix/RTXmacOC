@@ -42,6 +42,12 @@ verdict "5  дисплеи перечислены"                    "СЛОЙ 
 verdict "5  modeset проглочен"                      "СЛОЙ 5 (C.4d)"
 verdict "5  вывод подтверждён железом"              "ВЫВОД ПОДТВЕРЖДЁН ЖЕЛЕЗОМ"
 verdict "6  GPU перенёс данные по нашей команде"    "вычислительный путь ЖИВ"
+if has "VRAM pool: layout"; then
+    verdict "3  GPU достиг границы PD1 и конца большого пула" "VRAM GPU probes PASS:"
+    line "VRAM pool: layout" | sed 's/^/      /'
+    if has "HW-Linux VRAM pool:"; then line "HW-Linux VRAM pool:" | sed 's/^/      /'; fi
+    echo "    Это адресные пробы пула; результат Linux не подтверждает macOS."
+fi
 if has "сабмит прошёл, но вывода НЕТ"; then
     printf '  \033[33m!\033[0m %s\n' "5  modeset проглочен, но голова НЕ сканирует — апертура намеренно не отдана"
     line "сабмит прошёл, но вывода НЕТ" | sed 's/^/      /'

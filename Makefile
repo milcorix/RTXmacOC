@@ -21,8 +21,8 @@ DATE     := $(shell date +%Y%m%d)
 
 # Проверки модели и протокола, не требующие ни GPU, ни подписанных прошивок.
 # Этот результат не является аппаратным подтверждением ни Linux, ни macOS.
-.PHONY: check
-check: gsp-rpc-test gsp-rm-test gmmu-test gsp-fifo-test gsp-disp-test gsp-gr-test vram-test
+.PHONY: check abi-check
+check: abi-check gsp-rpc-test gsp-rm-test gmmu-test gsp-fifo-test gsp-disp-test gsp-gr-test vram-test gsp-memory-test
 	./tools/gsp_rpc_test
 	./tools/gsp_rm_test
 	./tools/gmmu_test
@@ -30,6 +30,15 @@ check: gsp-rpc-test gsp-rm-test gmmu-test gsp-fifo-test gsp-disp-test gsp-gr-tes
 	./tools/gsp_disp_test
 	./tools/gsp_gr_test
 	./tools/vram_test
+	./tools/gsp_memory_test
+
+abi-check:
+	$(CC) -std=c11 -Wall -Wextra -Werror -x c -fsyntax-only driver/macos/MilcorixABI.h
+	$(CXX) -std=c++17 -Wall -Wextra -Werror -x c++ -fsyntax-only driver/macos/MilcorixABI.h
+
+.PHONY: gsp-memory-test
+gsp-memory-test:
+	$(CC) $(CFLAGS) tools/gsp_memory_test.c driver/gsp/gsp_memory.c driver/gsp/gmmu.c driver/gsp/vram.c -o tools/gsp_memory_test
 
 .PHONY: vram-test
 vram-test:
@@ -77,6 +86,7 @@ gsp-boot-linux:
 	   driver/gsp/fb_layout.c driver/gsp/booter.c driver/gsp/gsp_fw.c driver/gsp/elf64.c \
 	   driver/gsp/gsp_rpc.c driver/gsp/gsp_rm.c driver/gsp/gmmu.c driver/gsp/gsp_fifo.c \
 	   driver/gsp/gsp_disp.c driver/gsp/gsp_gr.c driver/gsp/gsp_exec.c \
+	   driver/gsp/gsp_memory.c driver/gsp/vram.c \
 	   -o tools/gsp_boot_linux
 
 # Офлайн-проверка раскладки очередей GSP-RM (слой 2, задача 7). Без GPU.

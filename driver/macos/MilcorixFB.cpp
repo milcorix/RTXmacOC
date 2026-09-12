@@ -417,9 +417,23 @@ bool MilcorixFB::gspBringUp(void)
     /* dbg=nullptr: в ядре некуда дампить бинарные логи, и это же отключает
        секундные диагностические паузы, которые повесили бы старт. */
     nv_gsp_scanout_t scan;
-    /* С этого момента прошивка живёт в арене — освобождать её больше нельзя. */
+    nv_gsp_options options = {};
+    /* Новый пул включается явно для аппаратной проверки. Нулевое значение
+       сохраняет исходный режим; успешные GPU-пробы не заменяют macOS-приёмку. */
+    uint32_t appMiB = mfb_read_boot_uint("milcorixvram", 0, 4096);
+    if (appMiB && appMiB < 1024) {
+        mfb_log(nullptr, "MilcorixFB: milcorixvram должен быть 0 или 1024..4096 МиБ\n");
+        return false;
+    }
+    options.app_vram_bytes = (uint64_t)appMiB << 20;
+    uint64_t consoleOff = consoleFbOffsetInBar1();
+    if (consoleOff != ~0ull) {
+        options.console_vram_base = consoleOff;
+        options.console_vram_size = 128ull << 20; /* максимум allocScanoutFb */
+    }
+    /* Bring-up может запустить DMA даже при последующей ошибке. */
     fGspRunning = true;
-    int rc = nv_gsp_bringup(&io, &arena, &pci, /*dbg=*/nullptr, &scan, &fbp, &fGpu);
+    int rc = nv_gsp_bringup(&io, &arena, &pci, /*dbg=*/nullptr, &scan, &fbp, &fGpu, &options);
     if (rc != 0) {
         mfb_log(nullptr, "MilcorixFB: gspBringUp FAIL (rc=%d)\n", rc);
         return false;
@@ -550,6 +564,10 @@ bool MilcorixFB::start(IOService *provider)
        годный фреймбуфер, становиться фреймбуфером системы нельзя. --- */
     /* Замок нужен до первого обращения к операциям слоя 6. */
     fGpuLock = IOLockAlloc();
+    if (!fGpuLock) {
+        mfb_klog_status("fail:gpu-lock"); mfb_klog_flush(); teardown(); mfb_klog_free();
+        return false;
+    }
     bool ok = gspBringUp();
 
     if (!ok) {
@@ -613,6 +631,8 @@ bool MilcorixFB::start(IOService *provider)
  */
 void MilcorixFB::teardown(void)
 {
+    if (fGpuLock) IOLockLock(fGpuLock);
+    fGpu.ok = 0;
     freeScanoutFb();
     if (!fGspRunning) {
         freeDmaArena();
@@ -622,7 +642,15 @@ void MilcorixFB::teardown(void)
     if (fFbMem)   { fFbMem->release();   fFbMem = nullptr; }
     if (fBar1Map) { fBar1Map->release(); fBar1Map = nullptr; fBar1 = nullptr; }
     if (fBar0Map) { fBar0Map->release(); fBar0Map = nullptr; fBar0 = nullptr; }
+    if (fGpuLock) IOLockUnlock(fGpuLock);
+}
+
+void MilcorixFB::free(void)
+{
+    /* Клиент удерживает провайдера до завершения своих методов. Замок нельзя
+       уничтожать в stop(): на нём ещё может ждать внешний вызов. */
     if (fGpuLock) { IOLockFree(fGpuLock); fGpuLock = nullptr; }
+    super::free();
 }
 
 void MilcorixFB::freeDmaArena(void)
@@ -892,18 +920,18 @@ IOReturn MilcorixFB::gpuCopy(uint64_t srcOffset, uint64_t dstOffset, uint32_t by
 {
     if (outNanos) *outNanos = 0;
     if (!fGpuLock) return kIOReturnNotReady;
+    IOLockLock(fGpuLock);
     if (!gpuRegionOk(srcOffset, bytes) || !gpuRegionOk(dstOffset, bytes))
-        return kIOReturnBadArgument;
+        { IOLockUnlock(fGpuLock); return kIOReturnBadArgument; }
     /* Перекрытие движок отработает как попало — запрещаем явно. */
     if ((srcOffset < dstOffset + bytes) && (dstOffset < srcOffset + bytes))
-        return kIOReturnBadArgument;
+        { IOLockUnlock(fGpuLock); return kIOReturnBadArgument; }
 
     nv_mmio_t io;
     io.ctx = (void *)fBar0; io.rd = mfb_rd; io.wr = mfb_wr;
     io.udelay = mfb_udelay; io.log = mfb_log;
     uint64_t win = ~0ull;
 
-    IOLockLock(fGpuLock);
     uint64_t t0 = 0, t1 = 0;
     clock_get_uptime(&t0);
     int rc = nv_gsp_gpu_copy(&io, &win, &fGpu,
@@ -981,7 +1009,7 @@ bool MilcorixFB::gpuClientOpen(void)
 {
     if (!fGpuLock) return false;
     IOLockLock(fGpuLock);
-    bool ok = (fGpuClients == 0);
+    bool ok = (fGpuClients == 0 && fGpu.ok);
     if (ok) fGpuClients = 1;
     IOLockUnlock(fGpuLock);
     return ok;

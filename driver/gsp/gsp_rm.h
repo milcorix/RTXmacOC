@@ -42,6 +42,14 @@
 #define NV_GSP_RM_VRAM_HANDLE    0x00ca0001u  /* наш хэндл VRAM-объекта */
 #define NV_GSP_RM_VMEM_HANDLE    0x00700001u  /* наш хэндл VirtualMemory-объекта */
 
+/* Внешний VMM: r535_mmu_vaspace_new(external=true). Структуры OGK 535.113.01,
+   пересказано для соответствия лицензии:
+   https://codebrowser.dev/linux/linux/drivers/gpu/drm/nouveau/nvkm/subdev/gsp/rm/r535/nvrm/vmm.h.html
+   https://codebrowser.dev/linux/linux/drivers/gpu/drm/nouveau/nvkm/subdev/gsp/rm/r535/vmm.c.html */
+#define NV_VASPACE_FLAGS_EXTERNALLY_OWNED (1u << 3)
+#define NV0080_CTRL_CMD_DMA_SET_PAGE_DIRECTORY 0x00801813u
+#define NV0080_SET_PAGE_DIRECTORY_SIZE 32u
+
 /* rpc_gsp_rm_control_v03_00 — шапка 24 байта (g_rpc-structures.h):
    hClient@0, hObject@4, cmd@8, status@12, paramsSize@16, flags@20, params@24. */
 #define NV_RM_CTRL_HDR_SIZE       24u
@@ -263,7 +271,9 @@ int nv_gsp_rm_subdevice_ctor(nv_gsp_rpc_chan *ch, uint32_t hClient, uint32_t hDe
 /*
  * GSP_RM_CONTROL (76): управляющий вызов cmd на объекте hObject. params — IN/OUT:
  * запрос копируется из params, ответ GSP копируется обратно в params (params_len байт).
- * *status ← поле status ответа (NV_OK==0). Порт r535_gsp_rpc_rm_ctrl_get/push.
+ * *status ← поле status ответа (NV_OK==0). rc=0 означает доставку RPC;
+ * отказ команды RM проверяется отдельно через *status.
+ * Порт r535_gsp_rpc_rm_ctrl_get/push.
  */
 int nv_gsp_rm_control(nv_gsp_rpc_chan *ch, uint32_t hClient, uint32_t hObject, uint32_t cmd,
                       uint8_t *params, uint32_t params_len, uint32_t *status);
@@ -281,11 +291,18 @@ int nv_gsp_fb_get_info(nv_gsp_rpc_chan *ch, uint32_t hClient, uint32_t hSubdevic
 int nv_gsp_rm_vaspace_ctor(nv_gsp_rpc_chan *ch, uint32_t hClient, uint32_t hDevice,
                            uint32_t *out_vaspace, uint32_t *status);
 
+int nv_gsp_rm_vaspace_external_ctor(nv_gsp_rpc_chan *ch, uint32_t hClient, uint32_t hDevice,
+                                    uint32_t *out_vaspace, uint32_t *status);
+/* Вызывается до создания каналов: корень PD3 в VRAM, 4 записи для Ada.
+   rc/status имеют тот же раздельный смысл, что у nv_gsp_rm_control. */
+int nv_gsp_rm_set_page_directory(nv_gsp_rpc_chan *ch, uint32_t hClient, uint32_t hDevice,
+                                 uint32_t hVASpace, uint64_t root_phys, uint32_t *status);
+
 /*
- * Проход D (прямой GMMU): отдать GSP физ-адреса верхних PD-уровней иерархии, которую
- * клиент сам построил во VRAM (см. gmmu.c). RM_CONTROL cmd=0x90f10106 на объекте
- * hVASpace (FERMI_VASPACE_A). GSP «прибивает» переданные уровни и прошивает PDB в
- * своём instance-block; листовые PTE (SPT) — общий физ-VRAM, отдельного RPC не нужно.
+ * Исторический проход D: COPY_SERVER_RESERVED_PDES, RM_CONTROL cmd=0x90f10106
+ * на hVASpace. В nouveau это обмен PDE для RM-managed резерва при external=false.
+ * Для собственного полного VMM применять set_page_directory выше. Старые логи
+ * подтверждают статус контрола и read-back PTE, но не прежнее объяснение PDB.
  *
  * pd_phys[0..numLevels-1] — физ-адреса уровней СВЕРХУ ВНИЗ: [0]=PD3(корень), [1]=PD2,
  * [2]=PD1. numLevels = 2 или 3 (для 4К-листа Ada строим 3). virtAddrLo/Hi — диапазон

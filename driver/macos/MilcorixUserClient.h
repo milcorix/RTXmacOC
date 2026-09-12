@@ -1,47 +1,22 @@
 /*
  * MilcorixUserClient.h — граница между обычной программой и видеокартой.
  *
- * Это и есть слой 6A: не Metal и не попытка притвориться Metal'ом, а свой
- * интерфейс поверх канала, который уже исполняет команды на железе. Приложение
- * кладёт данные в память GPU, просит движок их обработать и забирает результат.
- *
- * Почему свой интерфейс, а не Apple'овский: путь через Metal требует, чтобы kext
- * был полноценным акселератором IOAcceleratorFamily2 с недокументированным ABI,
- * плюс компилятор AIR, которого нет ни у кого. Свой user-client не требует
- * ничего из этого и работает уже сегодня — см. docs/accel-plan.md.
- *
- * Протокол намеренно узкий: четыре операции, никакого разделяемого состояния
- * между клиентами, все смещения проверяются по границам области. Расширять его
- * будем по мере появления настоящих операций (вычислительные ядра, декод видео).
+ * Приложение выделяет VRAM-ресурсы, передаёт данные и ожидает GPU-копии.
+ * ABI описан в MilcorixABI.h. Это этап проверки памяти и submission на пути
+ * к полноценному ускорителю (docs/DRIVER-PLAN.md); работа на macOS требует
+ * отдельного аппаратного лога. Пока доступен один клиент и синхронные команды.
  */
 #ifndef MILCORIX_USER_CLIENT_H
 #define MILCORIX_USER_CLIENT_H
 
 #include <IOKit/IOUserClient.h>
+#include <IOKit/IOLib.h>
+#include "MilcorixABI.h"
+extern "C" {
+#include "../gsp/vram.h"
+}
 
 class MilcorixFB;
-
-/* Тип соединения. IOFramebuffer занимает свои типы под WindowServer, поэтому
-   берём заведомо чужой и отдаём его только своему клиенту. */
-#define MILCORIX_CONNECT_TYPE   0x4D4C4358u   /* 'MLCX' */
-
-/* Селекторы внешних методов. */
-enum {
-    kMilcorixMethodGetInfo = 0,   /* сведения о контексте GPU */
-    kMilcorixMethodWrite   = 1,   /* хост → память GPU */
-    kMilcorixMethodRead    = 2,   /* память GPU → хост */
-    kMilcorixMethodCopy    = 3,   /* копирование силами GPU */
-    kMilcorixMethodCount
-};
-
-/* Ответ kMilcorixMethodGetInfo. Раскладка общая с userspace-утилитой. */
-typedef struct {
-    uint32_t ready;          /* 1 — канал жив, команды принимаются */
-    uint32_t channel;        /* хэндл канала GPFIFO */
-    uint32_t copy_engine;    /* хэндл объекта копирования */
-    uint32_t reserved;
-    uint64_t scratch_size;   /* сколько памяти GPU доступно под данные */
-} MilcorixGpuInfo;
 
 class MilcorixUserClient : public IOUserClient
 {
@@ -63,14 +38,20 @@ private:
        Иначе stop() у провайдера обнулял бы указатель под уже выполняющимся
        внешним методом: проверка и разыменование разнесены во времени, а метод
        идёт на потоке вызывающего. Классический use-after-free. */
-    MilcorixFB *fOwner;
+    MilcorixFB *fOwner = nullptr;
     task_t      fTask;
-    bool        fCounted;   /* мы заняли слот клиента слоя 6 */
+    bool        fCounted = false;   /* мы заняли слот клиента слоя 6 */
+    IOLock     *fResourceLock = nullptr;
+    nv_vram_pool fPool;     /* адреса здесь — смещения в scratch владельца */
+    bool        fManaged;
 
     IOReturn methodGetInfo(IOExternalMethodArguments *args);
-    IOReturn methodWrite(IOExternalMethodArguments *args);
-    IOReturn methodRead(IOExternalMethodArguments *args);
-    IOReturn methodCopy(IOExternalMethodArguments *args);
+    IOReturn methodWrite(IOExternalMethodArguments *args, bool resource = false);
+    IOReturn methodRead(IOExternalMethodArguments *args, bool resource = false);
+    IOReturn methodCopy(IOExternalMethodArguments *args, bool resource = false);
+    IOReturn methodMemoryInfo(IOExternalMethodArguments *args);
+    IOReturn methodAlloc(IOExternalMethodArguments *args);
+    IOReturn methodFree(IOExternalMethodArguments *args);
 };
 
 #endif /* MILCORIX_USER_CLIENT_H */

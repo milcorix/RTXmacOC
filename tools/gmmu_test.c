@@ -307,6 +307,8 @@ int main(void)
     test_build_1page();
     test_map_range();
     test_large_range(0x20000000, 1ull << 30);
+    /* Точная геометрия bring-up: служебный 1 МиБ перед пользовательским ГиБ. */
+    test_large_range(0x20000000, (1ull << 30) + 0x100000);
     test_large_range(0x1ff000, (1ull << 30) + 0x3000);
     test_large_range((1ull << 38) - 4096, 8192);
     test_large_range((1ull << 47) - 4096, 8192);

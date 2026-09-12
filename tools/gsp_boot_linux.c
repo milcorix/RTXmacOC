@@ -143,6 +143,19 @@ static int find_bdf(char *out, size_t n)
 
 int main(int argc, char **argv)
 {
+    nv_gsp_options options = {0};
+    /* Дополнительный аргумент — размер нового пула в МиБ. Без него выполняется
+       прежний тест 1 МиБ. Проверяем до открытия VFIO и любого MMIO. */
+    if (argc >= 3) {
+        char *end = NULL;
+        errno = 0;
+        unsigned long mib = strtoul(argv[2], &end, 10);
+        if (argc != 3 || errno || !end || *end || mib < 1024 || mib > 4096) {
+            fprintf(stderr, "usage: gsp_boot_linux [BDF [app-vram-MiB:1024..4096]]\n");
+            return 2;
+        }
+        options.app_vram_bytes = (uint64_t)mib << 20;
+    }
     char ab[40]; const char *bdf=(argc>=2)?argv[1]:NULL;
     if (!bdf){ if(find_bdf(ab,sizeof(ab))==0){bdf=ab;printf("BDF: %s\n",bdf);} else {fprintf(stderr,"NVIDIA не найдена\n");return 2;} }
     struct vfio_ctx v; if (vfio_open(&v,bdf)){vfio_close(&v);return 1;} vfio_busmaster(&v);
@@ -174,7 +187,7 @@ int main(int argc, char **argv)
     nv_gsp_gpu_ctx_t gpu;
     nv_gsp_scanout_t scan;
     memset(&gpu, 0, sizeof(gpu));
-    int rc=nv_gsp_bringup(&io,&ar,&pci,&dbg,&scan,NULL,&gpu);
+    int rc=nv_gsp_bringup(&io,&ar,&pci,&dbg,&scan,NULL,&gpu,&options);
 
     struct vfio_iommu_type1_dma_unmap u={.argsz=sizeof(u),.iova=ARENA_IOVA,.size=ARENA_SIZE};
     ioctl(v.container,VFIO_IOMMU_UNMAP_DMA,&u); munmap(abuf,ARENA_SIZE); vfio_close(&v);
@@ -183,5 +196,13 @@ int main(int argc, char **argv)
            gpu.ok ? (gpu.selftest_ok ? "GPU выполнил нашу команду (копия CE сошлась)"
                                      : "канал жив, но копия НЕ прошла")
                   : "контекст исполнения не поднят");
+    if (options.app_vram_bytes) {
+        int pool_ok = rc == 0 && gpu.ok && gpu.external_vmm && gpu.pool_selftest_ok &&
+                      gpu.scratch_size == options.app_vram_bytes;
+        printf("=== HW-Linux VRAM pool: %s requested=%llu MiB ===\n",
+               pool_ok ? "PASS" : "FAIL",
+               (unsigned long long)(options.app_vram_bytes >> 20));
+        return pool_ok ? 0 : 1;
+    }
     return rc==0?0:1;
 }

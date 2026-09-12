@@ -18,6 +18,32 @@
 Статус: **OFFLINE/SRC**, аппаратная проверка нового кода отдельно на каждой ОС.
 Цель/метрики: [DRIVER-PLAN.md](DRIVER-PLAN.md).
 
+### Подключение внешнего VMM (после `c4c559b`)
+
+Сверены [r535_mmu_vaspace_new / r535_mmu_promote_vmm](https://codebrowser.dev/linux/linux/drivers/gpu/drm/nouveau/nvkm/subdev/gsp/rm/r535/vmm.c.html)
+и [выжимка RM 535.113.01, nvrm/vmm.h](https://codebrowser.dev/linux/linux/drivers/gpu/drm/nouveau/nvkm/subdev/gsp/rm/r535/nvrm/vmm.h.html).
+Пересказано для соответствия лицензии.
+
+| Наш код | Соответствие upstream |
+|---|---|
+| `nv_gsp_rm_vaspace_external_ctor` | `NV_VASPACE_ALLOCATION_PARAMETERS`: 48 байт, index@0=0, flags@4=bit3 (`IS_EXTERNALLY_OWNED`), прочее 0 |
+| `nv_gsp_rm_set_page_directory` | `DMA_SET_PAGE_DIRECTORY=0x801813` на **device**. 32 байта: physAddress u64@0, numEntries u32@8=4 (Ada PD3), flags@12=0 (VIDMEM), hVASpace@16, chId@20/subDeviceId@24/pasid@28=0 |
+| `gsp_memory.c` | Собственный раскрой из FB-region info: отдельные service/app/tables/channel. Физическую память приложения ведёт клиент; GPU VA публикуется через внешний корень. Большой memlist не отправляется; прежняя 1-МиБ RPC-проба остаётся для служебных страниц |
+
+**Исправление исторического объяснения:** `r535_mmu_promote_vmm` использует
+`external=true` и SET_PAGE_DIRECTORY. COPY_SERVER_RESERVED_PDES вызывается в
+ветке `external=false`, для RM-managed резерва VA 4 ГиБ размером 512 МиБ.
+Старые записи ниже и в AGENTS описывали COPY как установку внешнего корня —
+это неверная атрибуция. Старые HW-логи сохраняют смысл наблюдавшихся статусов
+и PTE read-back, но не доказывают корректность такого объяснения.
+
+Проверка нового корня — отдельный HW-гейт. Динамическое изменение таблиц,
+TLB invalidation, UNSET_PAGE_DIRECTORY и полноценный teardown ещё предстоят.
+Сейчас таблицы строятся до публикации корня и остаются неизменными; alloc/free
+перераспределяют принадлежащие одному клиенту диапазоны уже отображённого пула.
+
+### Построение таблиц и учёт диапазонов
+
 | Наш код | Источник | Что проверено |
 |---|---|---|
 | `gmmu.c: nv_gmmu_range_plan/build` | [nouveau gp100_vmm_desc_12, gp100_vmm_pd1_pde, gp100_vmm_pgt_pte](https://codebrowser.dev/linux/linux/drivers/gpu/drm/nouveau/nvkm/subdev/mmu/vmmgp100.c.html) | Радикс 2/9/9/8/9, PDE 8б и dual-PDE 16б, страницы таблиц 4К, PTE для VRAM. Расчёт арены и диапазонный обход — собственные |

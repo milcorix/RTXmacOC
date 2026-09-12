@@ -59,13 +59,17 @@ typedef struct {
  *     +0x0000  кольцо GPFIFO (ring_entries записей по 8 байт)
  *     +0x1000  пушбуфер
  *     +0x2000  семафор завершения
- *     +0x3000  свободно — отдано под данные (scratch_*)
+ *     +0x3000  данные (scratch_*) в прежнем 1-МиБ режиме
+ * Во внешнем VMM scratch начинается после отдельного служебного 1 МиБ;
+ * размер приложения не включает кольцо, таблицы и память канала.
  *
  * Регион имеет и GPU-VA, и физический адрес во VRAM: команды адресуются по VA,
  * а CPU дотягивается до тех же байт через окно PRAMIN по физическому адресу.
  */
 typedef struct {
     int      ok;             /* 1 — канал создан, привязан, запланирован и исполнил команду */
+    int      external_vmm;   /* корень принадлежит драйверу, установлен через device control */
+    int      pool_selftest_ok; /* GPU-копия в конце пользовательского пула сошлась */
     uint32_t h_client, h_device, h_vaspace, h_channel, h_ce;
     uint32_t chid, runlist;  /* token дверного звонка = (runlist<<16)|chid */
     uint32_t engine_type;    /* RM_ENGINE_TYPE движка канала */
@@ -101,6 +105,9 @@ int nv_gsp_gpu_copy(const nv_mmio_t *io, uint64_t *win_base, nv_gsp_gpu_ctx_t *g
                     uint64_t src_va, uint64_t dst_va, uint32_t bytes,
                     uint32_t timeout_ms);
 
+/* Разрушительные адресные пробы ещё не выданного приложению пула. */
+int nv_gsp_gpu_pool_test(const nv_mmio_t *io, uint64_t *win_base, nv_gsp_gpu_ctx_t *gpu);
+
 /*
  * Провайдер scanout-фреймбуфера. Платформа решает, ГДЕ живёт FB, потому что от
  * этого зависит, сможет ли ОС отдать его своему композитору:
@@ -134,6 +141,11 @@ typedef struct {
                           картинку»: на этой стадии экран остаётся за EFI-FB. */
 } nv_gsp_fb_provider_t;
 
+typedef struct {
+    uint64_t app_vram_bytes;   /* 0 — старый 1-МиБ тест; >=1 ГиБ — внешний VMM */
+    uint64_t console_vram_base, console_vram_size; /* исключить живую консоль */
+} nv_gsp_options;
+
 /*
  * Полный bring-up GSP-RM: FWSEC-FRTS → staging → Booter → RPC → слои 3-5.
  *   io   — доступ к BAR0 (+ .log для трассировки, .udelay для задержек);
@@ -153,6 +165,6 @@ typedef struct {
 int nv_gsp_bringup(const nv_mmio_t *io, nv_dma_arena_t *ar,
                    const nv_gsp_pci_info_t *pci, const nv_gsp_debug_t *dbg,
                    nv_gsp_scanout_t *scan, const nv_gsp_fb_provider_t *fbp,
-                   nv_gsp_gpu_ctx_t *gpu);
+                   nv_gsp_gpu_ctx_t *gpu, const nv_gsp_options *options);
 
 #endif /* RTXMACOC_GSP_BRINGUP_H */

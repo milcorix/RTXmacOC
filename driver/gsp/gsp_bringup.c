@@ -38,6 +38,7 @@
 #include "fw_blob.h"
 #include "nv_dma.h"
 #include "gsp_bringup.h"
+#include "gsp_memory.h"
 
 #define TIMEOUT_US (2u * 1000u * 1000u)
 #define FALCON_DESC_V3_SIZE 44u
@@ -156,8 +157,9 @@ static int exec_cpu_sequencer(struct seq_ctx *c, const uint32_t *cb, uint32_t cm
 int nv_gsp_bringup(const nv_mmio_t *io, nv_dma_arena_t *ar,
                const nv_gsp_pci_info_t *pci, const nv_gsp_debug_t *dbg,
                nv_gsp_scanout_t *scan, const nv_gsp_fb_provider_t *fbp,
-               nv_gsp_gpu_ctx_t *gpu)
+               nv_gsp_gpu_ctx_t *gpu, const nv_gsp_options *options)
 {
+    const int external_vmm = options && options->app_vram_bytes;
     if (scan) { scan->fb_phys=0; scan->width=0; scan->height=0; scan->pitch=0;
                 scan->ok=0; scan->fb_target=0; scan->edid_ok=0; }
     if (gpu)  { memset(gpu, 0, sizeof(*gpu)); }
@@ -540,7 +542,9 @@ int nv_gsp_bringup(const nv_mmio_t *io, nv_dma_arena_t *ar,
 
             /* --- B-метрика №2: FERMI_VASPACE_A — корень GMMU (GPU VA-пространство) --- */
             uint32_t hva=0, vst=0xffffffff;
-            int vrc = nv_gsp_rm_vaspace_ctor(&ch, hcli, hdev, &hva, &vst);
+            int vrc = external_vmm
+                ? nv_gsp_rm_vaspace_external_ctor(&ch, hcli, hdev, &hva, &vst)
+                : nv_gsp_rm_vaspace_ctor(&ch, hcli, hdev, &hva, &vst);
             l3_vaspace_ok = (vrc == NV_GSP_RM_OK && vst == 0);
             nv_log(io, "СЛОЙ 3B: FERMI_VASPACE_A rc=%d status=0x%x handle=0x%08x%s\n",
                    vrc, vst, hva, l3_vaspace_ok ? "" : "  (не OK)");
@@ -550,7 +554,22 @@ int nv_gsp_bringup(const nv_mmio_t *io, nv_dma_arena_t *ar,
                FB-региона (reserved=0, не protected) и регистрируем его memlist'ом. */
             uint64_t vsize = 0x100000; /* 1 МиБ = 256 страниц */
             uint64_t vphys = 0; int have_phys = 0;
-            for (uint32_t i = 0; i < si.num_regions && !have_phys; i++) {
+            nv_gsp_memory_layout memory;
+            memset(&memory, 0, sizeof(memory));
+            if (external_vmm) {
+                nv_vram_span console = {options->console_vram_base, options->console_vram_size};
+                int mplan = nv_gsp_memory_plan(&si, options->app_vram_bytes, &console, &memory);
+                if (!mplan) {
+                    vphys = memory.service_phys;
+                    vsize = memory.tables.bytes;
+                    have_phys = 1;
+                }
+                nv_log(io, "VRAM pool: layout rc=%d app=%llu MiB owned=0x%llx+0x%llx tables=0x%llx\n",
+                       mplan, (unsigned long long)(options->app_vram_bytes >> 20),
+                       (unsigned long long)memory.owned.base, (unsigned long long)memory.owned.size,
+                       (unsigned long long)memory.tables.table_bytes);
+            }
+            for (uint32_t i = 0; !external_vmm && i < si.num_regions && !have_phys; i++) {
                 if (si.regions[i].reserved || si.regions[i].prot) continue;
                 uint64_t base = (si.regions[i].base + 0xfffff) & ~0xfffffull;   /* 1 МиБ-выравн. */
                 uint64_t cand = base + 0x10000000ull;                           /* 256 МиБ вглубь */
@@ -559,10 +578,14 @@ int nv_gsp_bringup(const nv_mmio_t *io, nv_dma_arena_t *ar,
             }
             if (have_phys) {
                 uint32_t hmem=0, mrres=0xffffffff;
-                int mrc = nv_gsp_rm_vram_memlist(&ch, hcli, hdev, vphys, vsize, &hmem, &mrres);
+                /* Для внешнего VMM памятью управляет клиент. Сохраняем RPC-пробу
+                   только для служебного 1 МиБ; большой пул не сериализуем в
+                   memlist. Его GPU-доступ задают наши PTE и корень устройства. */
+                uint64_t registered_bytes = external_vmm ? NV_GSP_SERVICE_BYTES : vsize;
+                int mrc = nv_gsp_rm_vram_memlist(&ch, hcli, hdev, vphys, registered_bytes, &hmem, &mrres);
                 l3_vram_ok = (mrc == NV_GSP_RM_OK && mrres == 0);
                 nv_log(io, "СЛОЙ 3C: VRAM memlist phys=0x%llx size=0x%llx rc=%d rpc_result=0x%x handle=0x%08x\n",
-                       (unsigned long long)vphys, (unsigned long long)vsize, mrc, mrres, hmem);
+                       (unsigned long long)vphys, (unsigned long long)registered_bytes, mrc, mrres, hmem);
 
                 /* --- ПРОХОД D: memlist VRAM → GPU VA через ПРЯМОЙ GMMU ---
                    RPC-путь (MAP_MEMORY_DMA fn=14) на железе = тупик (NV_ERR_INVALID_
@@ -579,6 +602,13 @@ int nv_gsp_bringup(const nv_mmio_t *io, nv_dma_arena_t *ar,
                     t.pd1_phys = pt_base + 2ull * 0x1000ull;
                     t.pd0_phys = pt_base + 3ull * 0x1000ull;
                     t.spt_phys = pt_base + 4ull * 0x1000ull;   /* лист (SPT) */
+                    if (external_vmm) {
+                        t.pd3_phys = memory.tables.level_phys[0];
+                        t.pd2_phys = memory.tables.level_phys[1];
+                        t.pd1_phys = memory.tables.level_phys[2];
+                        t.pd0_phys = memory.tables.level_phys[3];
+                        t.spt_phys = memory.tables.level_phys[4];
+                    }
 
                     /* Целевой GPU VA: выровнен на pageSize=0x20000000 (512 МиБ). */
                     uint64_t va = NV90F1_COPY_PDES_PAGESIZE_DEFAULT;   /* второй слот, ≠0 */
@@ -586,7 +616,9 @@ int nv_gsp_bringup(const nv_mmio_t *io, nv_dma_arena_t *ar,
 
                     /* Построить иерархию PD3→…→SPT для [va, va+1МиБ) → phys vphys. */
                     uint64_t win = ~0ull;                              /* инвалидировать кэш окна */
-                    int grc = nv_gmmu_map_range(io, &win, &t, va, vphys, npages);
+                    int grc = external_vmm
+                        ? nv_gmmu_range_build(io, &win, &memory.tables, vphys)
+                        : nv_gmmu_map_range(io, &win, &t, va, vphys, npages);
                     nv_log(io, "СЛОЙ 3D: GMMU build pt_base=0x%llx va=0x%llx npages=%u rc=%d\n",
                            (unsigned long long)pt_base, (unsigned long long)va, npages, grc);
 
@@ -598,10 +630,13 @@ int nv_gsp_bringup(const nv_mmio_t *io, nv_dma_arena_t *ar,
                         uint32_t cpst = 0xffffffffu;
                         /* hSubDevice=0, subDeviceId=0 — как r535_mmu_promote_vmm (unicast,
                            subDevice 0); GSP резолвит субустройство по нашему клиенту. */
-                        int cprc = nv_gsp_rm_vaspace_copy_pdes(&ch, hcli, hva, 0, 0,
-                                                               va_lo, va_hi, pd_phys, 3, &cpst);
+                        int cprc = external_vmm
+                            ? nv_gsp_rm_set_page_directory(&ch, hcli, hdev, hva, t.pd3_phys, &cpst)
+                            : nv_gsp_rm_vaspace_copy_pdes(&ch, hcli, hva, 0, 0,
+                                                         va_lo, va_hi, pd_phys, 3, &cpst);
                         l3_map_ok = (cprc == NV_GSP_RM_OK && cpst == 0);
-                        nv_log(io, "СЛОЙ 3D: COPY_SERVER_RESERVED_PDES rc=%d status=0x%x%s\n",
+                        nv_log(io, "СЛОЙ 3D: %s rc=%d status=0x%x%s\n",
+                               external_vmm ? "DMA_SET_PAGE_DIRECTORY" : "COPY_SERVER_RESERVED_PDES",
                                cprc, cpst, l3_map_ok ? "" : "  (не OK)");
 
                         /* Bonus: read-back записанной листовой PTE через PRAMIN. */
@@ -611,6 +646,7 @@ int nv_gsp_bringup(const nv_mmio_t *io, nv_dma_arena_t *ar,
                                (unsigned long long)pte, (unsigned long long)want,
                                (int)(pte & NV_GMMU_PTE_VALID),
                                (pte == want) ? "MATCH" : "MISMATCH");
+                        if (pte != want) l3_map_ok = 0;
 
                         /* ============ СЛОЙ 4 A1+A2: канал GPFIFO (CE0) ============
                            A1: буферы во VRAM (instance/RAMFC, USERD, method-buffer) —
@@ -620,6 +656,7 @@ int nv_gsp_bringup(const nv_mmio_t *io, nv_dma_arena_t *ar,
                            Порт r535_chan_ramfc_write. */
                         if (l3_map_ok && l4_ce_engtype >= 0) {
                             uint64_t buf_base = pt_base + 0x10000ull;      /* за 5 таблицами */
+                            if (external_vmm) buf_base = memory.channel_phys;
                             uint64_t inst_phys   = buf_base + 0x0000ull;   /* instance+RAMFC */
                             uint64_t userd_phys  = buf_base + 0x1000ull;
                             uint64_t mthd_phys   = buf_base + 0x2000ull;   /* method-buffer */
@@ -754,6 +791,12 @@ int nv_gsp_bringup(const nv_mmio_t *io, nv_dma_arena_t *ar,
                                         gpu->scratch_va   = va    + 0x3000ull;
                                         gpu->scratch_phys = vphys + 0x3000ull;
                                         gpu->scratch_size = (vsize > 0x3000ull) ? (vsize - 0x3000ull) : 0ull;
+                                        if (external_vmm) {
+                                            gpu->scratch_va = memory.app_va;
+                                            gpu->scratch_phys = memory.app_phys;
+                                            gpu->scratch_size = memory.app_bytes;
+                                            gpu->external_vmm = 1;
+                                        }
                                         gpu->class_engine_id = l4_class_engine_id;
                                         /* Проход C занял слот 0 и оставил GP_PUT=1 —
                                            продолжаем с этого места, а не с нуля. */
@@ -799,6 +842,15 @@ int nv_gsp_bringup(const nv_mmio_t *io, nv_dma_arena_t *ar,
                                             else
                                                 nv_log(io, "СЛОЙ 6: копия НЕ прошла (rc=%d, расхождений %u, первое @0x%x=0x%08x)\n",
                                                        crc6, bad6, firstoff, firstval);
+                                            if (gpu->external_vmm && gpu->selftest_ok &&
+                                                nv_gsp_gpu_pool_test(io, &win, gpu)) {
+                                                /* Не выдаём ОС пул, в котором GPU не достиг
+                                                   дальних адресов; нужен новый bring-up. */
+                                                gpu->ok = 0;
+                                                nv_log(io, "VRAM pool: GPU probes FAIL, pool unavailable\n");
+                                            }
+                                            if (gpu->external_vmm && !gpu->pool_selftest_ok)
+                                                gpu->ok = 0;
                                         }
                                     }
                                 }
@@ -1370,7 +1422,8 @@ int nv_gsp_bringup(const nv_mmio_t *io, nv_dma_arena_t *ar,
         if (l3_vram_ok)
             nv_log(io, "*** СЛОЙ 3 (проход C): регистрация VRAM-объекта (NV01_MEMORY_LIST_FBMEM) — OK ***\n");
         if (l3_map_ok)
-            nv_log(io, "*** СЛОЙ 3 (проход D): прямой GMMU — page-tables во VRAM + COPY_SERVER_RESERVED_PDES (GSP прошил PDB) ***\n");
+            nv_log(io, "*** СЛОЙ 3 (проход D): прямой GMMU — page-tables во VRAM + %s ***\n",
+                   external_vmm ? "DMA_SET_PAGE_DIRECTORY (external VMM)" : "COPY_SERVER_RESERVED_PDES");
         if (l4_devinfo_ok)
             nv_log(io, "*** СЛОЙ 4 (проход A0): FIFO device-info прочитан — движки GPU перечислены%s ***\n",
                    (l4_ce_engtype >= 0) ? ", CE0 найден" : "");

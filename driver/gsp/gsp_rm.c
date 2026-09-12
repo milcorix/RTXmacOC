@@ -270,17 +270,46 @@ int nv_gsp_fb_get_info(nv_gsp_rpc_chan *ch, uint32_t hClient, uint32_t hSubdevic
     return NV_GSP_RM_OK;
 }
 
-int nv_gsp_rm_vaspace_ctor(nv_gsp_rpc_chan *ch, uint32_t hClient, uint32_t hDevice,
-                           uint32_t *out_vaspace, uint32_t *status)
+static int vaspace_ctor(nv_gsp_rpc_chan *ch, uint32_t hClient, uint32_t hDevice,
+                         uint32_t flags, uint32_t *out_vaspace, uint32_t *status)
 {
     uint32_t h = NV_GSP_RM_VASPACE_HANDLE;
     /* NV_VASPACE_ALLOCATION_PARAMETERS (48б): index=GPU_NEW, прочее 0 (дефолт). */
     uint8_t p[NV_VASPACE_ALLOC_PARAMS_SIZE];
     for (unsigned i = 0; i < sizeof(p); i++) p[i] = 0;
     st32(p + 0, NV_VASPACE_ALLOCATION_INDEX_GPU_NEW);     /* index */
+    st32(p + 4, flags);
     int rc = nv_gsp_rm_alloc(ch, hClient, hDevice, h, FERMI_VASPACE_A, p, sizeof(p), status);
     if (rc == NV_GSP_RM_OK && out_vaspace) *out_vaspace = h;
     return rc;
+}
+
+int nv_gsp_rm_vaspace_ctor(nv_gsp_rpc_chan *ch, uint32_t hClient, uint32_t hDevice,
+                           uint32_t *out_vaspace, uint32_t *status)
+{
+    return vaspace_ctor(ch, hClient, hDevice, 0, out_vaspace, status);
+}
+
+int nv_gsp_rm_vaspace_external_ctor(nv_gsp_rpc_chan *ch, uint32_t hClient, uint32_t hDevice,
+                                    uint32_t *out_vaspace, uint32_t *status)
+{
+    return vaspace_ctor(ch, hClient, hDevice, NV_VASPACE_FLAGS_EXTERNALLY_OWNED,
+                        out_vaspace, status);
+}
+
+int nv_gsp_rm_set_page_directory(nv_gsp_rpc_chan *ch, uint32_t hClient, uint32_t hDevice,
+                                 uint32_t hVASpace, uint64_t root_phys, uint32_t *status)
+{
+    if (!ch || (root_phys & 0xfffull) || root_phys >= (1ull << 40))
+        return NV_GSP_RM_ERR_ARG;
+    uint8_t p[NV0080_SET_PAGE_DIRECTORY_SIZE] = {0};
+    st64(p, root_phys);
+    st32(p + 8, 4);         /* Ada PD3: 4 записи */
+    /* flags@12: aperture VIDMEM=0; остальные флаги=0, как r535 external. */
+    st32(p + 16, hVASpace);
+    /* chId@20, subDeviceId@24 (BC=0), pasid@28 = 0. */
+    return nv_gsp_rm_control(ch, hClient, hDevice, NV0080_CTRL_CMD_DMA_SET_PAGE_DIRECTORY,
+                             p, sizeof(p), status);
 }
 
 int nv_gsp_rm_vaspace_copy_pdes(nv_gsp_rpc_chan *ch, uint32_t hClient, uint32_t hVASpace,

@@ -55,4 +55,5 @@ Tahoe_NVIDIA_Root_Patch/
 b99c30bf-*
 tools/gsp_gr_test
 tools/vram_test
+tools/gsp_memory_test
 __pycache__/

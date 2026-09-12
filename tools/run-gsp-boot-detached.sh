@@ -6,6 +6,7 @@
 # ЗАПУСКАТЬ ОТЦЕПЛЕННО:
 #   sudo systemd-run --unit=rtx-booter --collect bash /ABS/PATH/tools/run-gsp-boot-detached.sh
 # Результат: tools/gsp-boot.log ; маркер: tools/gsp-boot-DONE
+# Необязательный аргумент 1024..4096 — пользовательский пул VRAM в МиБ.
 set -u
 export PATH=/usr/bin:/bin:/usr/sbin:/sbin:$PATH   # для zstd (распаковка блоба в харнессе)
 
@@ -15,6 +16,14 @@ HARNESS_SRC="$DIR/gsp_boot_linux"
 HARNESS="/tmp/gsp_boot_linux"
 BDF="0000:01:00.0"
 AUD="0000:01:00.1"
+
+# Проверяем до trap и любых изменений состояния GPU/десктопа.
+APP_VRAM_MIB="${1:-0}"
+if [ "$#" -gt 1 ] || ! [[ "$APP_VRAM_MIB" =~ ^(0|[1-4][0-9]{3})$ ]] ||
+   { [ "$APP_VRAM_MIB" != 0 ] && (( APP_VRAM_MIB < 1024 || APP_VRAM_MIB > 4096 )); }; then
+    echo "usage: $0 [0 | app-vram-MiB:1024..4096]" >&2
+    exit 2
+fi
 
 exec > "$LOG" 2>&1
 drv_of() { basename "$(readlink "/sys/bus/pci/devices/$1/driver" 2>/dev/null)" 2>/dev/null; }
@@ -37,13 +46,19 @@ restore_gui() {
     echo "=== DONE $(date -u +%FT%TZ) ==="
     touch "$DIR/gsp-boot-DONE"
 }
-trap restore_gui EXIT
-
 echo "=== run-gsp-boot-detached $(date -u +%FT%TZ) ==="
 echo "kernel: $(uname -r)"
 [ "$(id -u)" -eq 0 ] || { echo "ERR: нужен root"; exit 1; }
 [ -n "$(ls -A /sys/kernel/iommu_groups 2>/dev/null)" ] || { echo "ERR: IOMMU не активен"; exit 1; }
 [ -f "$HARNESS_SRC" ] || { echo "ERR: нет $HARNESS_SRC"; exit 1; }
+# Фиксируем бинарь до отключения экрана; ошибка копирования не должна запускать
+# оставшийся от старого прогона /tmp/gsp_boot_linux.
+cp -f "$HARNESS_SRC" "$HARNESS" || exit 1
+chmod +x "$HARNESS" || exit 1
+sha256sum "$HARNESS"
+git -C "$DIR/.." rev-parse HEAD
+echo "app-vram-MiB: $APP_VRAM_MIB"
+trap restore_gui EXIT
 
 echo "-- грейс 6с перед гашением экрана --"
 sleep 6
@@ -87,8 +102,13 @@ for fn in "$BDF" "$AUD"; do
     echo "   $fn -> $(drv_of "$fn")"
 done
 
-cp -f "$HARNESS_SRC" "$HARNESS"; chmod +x "$HARNESS"
 echo "=== HARNESS ==="
-timeout 60 "$HARNESS" "$BDF"
-echo "=== harness rc=$? ==="
-exit 0
+if [ "$APP_VRAM_MIB" = 0 ]; then
+    timeout 60 "$HARNESS" "$BDF"
+else
+    # Таблицы большого пула записываются через MMIO; оставляем время на диагностику.
+    timeout 180 "$HARNESS" "$BDF" "$APP_VRAM_MIB"
+fi
+harness_rc=$?
+echo "=== harness rc=$harness_rc ==="
+exit "$harness_rc"
